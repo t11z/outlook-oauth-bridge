@@ -47,6 +47,10 @@ async function api(path, { method = 'GET', body } = {}) {
         err.data = data;
         throw err;
     }
+    // /api/state carries a fresh CSRF token on every response — this is what lets a
+    // page reload with an existing session cookie (no fresh /api/login) still make
+    // authenticated POST requests, instead of leaving this module's csrfToken unset.
+    if (data && typeof data.csrfToken === 'string') csrfToken = data.csrfToken;
     return data;
 }
 
@@ -688,8 +692,7 @@ function wireForms() {
         const current = $('pw-current').value;
         const next = $('pw-next').value;
         try {
-            const res = await api('/api/password', { method: 'POST', body: { current, next } });
-            csrfToken = res.csrfToken;
+            await api('/api/password', { method: 'POST', body: { current, next } });
             $('password-form').reset();
             toast('Password changed.');
         } catch (err) {
