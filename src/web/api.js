@@ -86,7 +86,7 @@ function projectState() {
         web: { passwordIsGenerated: s.web.passwordIsGenerated },
         smtp: { username: s.smtp.username, password: s.smtp.password, port: config.smtpPort },
         oauth: {
-            clientId: s.oauth.clientId,
+            clientId: oauth.currentClientId(),
             status: s.oauth.status,
             account: s.oauth.account,
             connectedAt: s.oauth.connectedAt,
@@ -180,7 +180,7 @@ async function handleSetClientId(req, res) {
 }
 
 async function handleDeviceStart(req, res) {
-    if (!store.state.oauth.clientId) return sendJson(res, 400, { error: 'client_id_not_set' });
+    if (!oauth.currentClientId()) return sendJson(res, 400, { error: 'client_id_not_set' });
     try {
         const info = await oauth.beginDeviceCodeFlow();
         sendJson(res, 202, info);
