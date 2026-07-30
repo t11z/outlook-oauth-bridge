@@ -79,10 +79,11 @@ function checkOrigin(req) {
 // Never spread store.state — web.passwordHash, web.sessionSecret, and
 // oauth.refreshToken must never reach the browser. Name every field
 // explicitly so a new state.json field can't leak here by accident.
-function projectState() {
+function projectState(csrfToken) {
     const s = store.state;
     return {
         instanceId: s.instanceId,
+        csrfToken,
         web: { passwordIsGenerated: s.web.passwordIsGenerated },
         smtp: { username: s.smtp.username, password: s.smtp.password, port: config.smtpPort },
         oauth: {
@@ -333,7 +334,12 @@ export async function handleApi(req, res, url) {
             clearSessionCookie(res);
             return sendJson(res, 200, { ok: true });
         }
-        if (req.method === 'GET' && pathname === '/api/state') return sendJson(res, 200, projectState());
+        // Handing the CSRF token back here — not just from /api/login — is what lets a
+        // page reload with an existing session cookie (no fresh login) still make
+        // authenticated POST requests. Without this, the browser tab's csrfToken
+        // variable stays unset after a reload and every mutating request gets a
+        // bare 403 { error: 'csrf' }, e.g. from the "Save & connect" client-id form.
+        if (req.method === 'GET' && pathname === '/api/state') return sendJson(res, 200, projectState(csrfTokenFor(session.sid)));
         if (req.method === 'GET' && pathname === '/api/events') return handleSse(req, res, cookies[SESSION_COOKIE]);
 
         if (req.method === 'POST' && pathname === '/api/oauth/client') return await handleSetClientId(req, res);
