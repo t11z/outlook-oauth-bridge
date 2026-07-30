@@ -15,6 +15,12 @@ const ERROR_BODIES = {
     quota: { status: 507, body: { error: { code: 'ErrorQuotaExceeded', message: 'Mailbox quota exceeded.' } } },
 };
 
+// Mirrors the real AADSTS900144 shape so a missing client_id fails the same
+// way against the mock as it does against real Microsoft — this is what
+// catches the client-id-source-mismatch bug (state.json vs config.oauth)
+// that the mock previously let through silently.
+const MISSING_CLIENT_ID = { error: 'invalid_request', error_description: "AADSTS900144: The request body must contain the following parameter: 'client_id'." };
+
 export function createFakeGraph() {
     const state = {
         mode: 'success', // sendMail behavior: 'success' | any ERROR_BODIES key | 'rate_limited' | 'hang' | 'reset' | 'invalid_grant'
@@ -52,6 +58,8 @@ export function createFakeGraph() {
         }
 
         if (url.pathname.endsWith('/devicecode') && req.method === 'POST') {
+            const params = new URLSearchParams(bodyBuf.toString('utf8'));
+            if (!params.get('client_id')) return json(res, 400, MISSING_CLIENT_ID);
             return json(res, 200, {
                 device_code: 'fake-device-code',
                 user_code: 'FAKE-CODE',
@@ -63,6 +71,7 @@ export function createFakeGraph() {
 
         if (url.pathname.endsWith('/token') && req.method === 'POST') {
             const params = new URLSearchParams(bodyBuf.toString('utf8'));
+            if (!params.get('client_id')) return json(res, 400, MISSING_CLIENT_ID);
             const grantType = params.get('grant_type');
 
             if (grantType === 'urn:ietf:params:oauth:grant-type:device_code') {

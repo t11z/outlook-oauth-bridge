@@ -16,8 +16,21 @@ function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// The client ID has two sources: state.json (set via the GUI, POST
+// /api/oauth/client) and BRIDGE_CLIENT_ID (env, seeded into state.json on
+// first run only). state.json wins — it is what the GUI writes and what the
+// device-start gate in web/api.js checks. Reading config.oauth.clientId
+// directly used to be the bug behind AADSTS900144: the GUI wrote here, but
+// requests were built from the env-only value, which was empty whenever
+// BRIDGE_CLIENT_ID wasn't set.
+export function currentClientId() {
+    return store.state?.oauth?.clientId || config.oauth.clientId;
+}
+
 function tokenParams(extra) {
-    const params = new URLSearchParams({ client_id: config.oauth.clientId, ...extra });
+    const clientId = currentClientId();
+    if (!clientId) throw new Error('client ID not configured');
+    const params = new URLSearchParams({ client_id: clientId, ...extra });
     // Device code flow needs no client_secret — it's a public-client grant.
     // Only sent if BRIDGE_CLIENT_SECRET is set, as a fallback for tenants
     // where "Allow public client flows" could not be enabled.
