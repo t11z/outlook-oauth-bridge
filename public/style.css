@@ -1,0 +1,339 @@
+/* ==========================================================================
+   Tokens — a relay-station palette: cool graphite ground, warm copper
+   signal. Named, not inherited defaults.
+   ========================================================================== */
+:root {
+  /* dark (default ground for an infra tool) */
+  --ink-950: #0b0e13;
+  --ink-900: #12161d;
+  --ink-800: #1a2029;
+  --ink-700: #232a35;
+  --line: #262d38;
+  --line-strong: #333c4a;
+  --text: #e7e9ee;
+  --text-muted: #96a0b0;
+  --text-faint: #616c7d;
+
+  --signal: #d68a3c;        /* copper — the one accent, spent deliberately */
+  --signal-strong: #e8a355;
+  --signal-ink: #1a1206;    /* text on signal-filled surfaces */
+
+  --ok: #4fbf8b;
+  --ok-weak: #12291f;
+  --warn: #d8b34a;
+  --warn-weak: #2e2610;
+  --err: #e2707a;
+  --err-weak: #33161a;
+  --info: #6ea8dd;
+  --info-weak: #16222f;
+
+  --sp-1: .25rem; --sp-2: .5rem; --sp-3: .75rem;
+  --sp-4: 1rem; --sp-5: 1.5rem; --sp-6: 2.25rem;
+
+  --r-sm: 3px; --r-md: 5px; --r-pill: 999px;
+  --shadow-1: 0 1px 0 rgba(0,0,0,.4);
+  --shadow-2: 0 12px 32px rgba(0,0,0,.5), 0 2px 8px rgba(0,0,0,.35);
+
+  --mono: ui-monospace, "Cascadia Code", "SF Mono", "Segoe UI Mono", Consolas, "Liberation Mono", monospace;
+  --sans: ui-sans-serif, "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  --dur-fast: 120ms; --dur: 220ms; --ease: cubic-bezier(.2,.7,.2,1);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --ink-950: #eef0f4;
+    --ink-900: #f7f8fa;
+    --ink-800: #ffffff;
+    --ink-700: #eceef2;
+    --line: #dbdfe6;
+    --line-strong: #c5cbd6;
+    --text: #171a20;
+    --text-muted: #565f6f;
+    --text-faint: #838da0;
+
+    --signal: #b06a24;
+    --signal-strong: #96591d;
+    --signal-ink: #fff7ec;
+
+    --ok: #1f8f5f;
+    --ok-weak: #e2f4ec;
+    --warn: #92700e;
+    --warn-weak: #faf0d6;
+    --err: #b8404b;
+    --err-weak: #fbe6e8;
+    --info: #2266a8;
+    --info-weak: #e5f0fa;
+
+    --shadow-1: 0 1px 0 rgba(20,24,33,.05);
+    --shadow-2: 0 12px 28px rgba(20,24,33,.12), 0 2px 6px rgba(20,24,33,.08);
+  }
+}
+:root[data-theme="dark"] {
+  --ink-950: #0b0e13; --ink-900: #12161d; --ink-800: #1a2029; --ink-700: #232a35;
+  --line: #262d38; --line-strong: #333c4a; --text: #e7e9ee; --text-muted: #96a0b0; --text-faint: #616c7d;
+  --signal: #d68a3c; --signal-strong: #e8a355; --signal-ink: #1a1206;
+  --ok: #4fbf8b; --ok-weak: #12291f; --warn: #d8b34a; --warn-weak: #2e2610;
+  --err: #e2707a; --err-weak: #33161a; --info: #6ea8dd; --info-weak: #16222f;
+  --shadow-1: 0 1px 0 rgba(0,0,0,.4); --shadow-2: 0 12px 32px rgba(0,0,0,.5), 0 2px 8px rgba(0,0,0,.35);
+}
+:root[data-theme="light"] {
+  --ink-950: #eef0f4; --ink-900: #f7f8fa; --ink-800: #ffffff; --ink-700: #eceef2;
+  --line: #dbdfe6; --line-strong: #c5cbd6; --text: #171a20; --text-muted: #565f6f; --text-faint: #838da0;
+  --signal: #b06a24; --signal-strong: #96591d; --signal-ink: #fff7ec;
+  --ok: #1f8f5f; --ok-weak: #e2f4ec; --warn: #92700e; --warn-weak: #faf0d6;
+  --err: #b8404b; --err-weak: #fbe6e8; --info: #2266a8; --info-weak: #e5f0fa;
+  --shadow-1: 0 1px 0 rgba(20,24,33,.05); --shadow-2: 0 12px 28px rgba(20,24,33,.12), 0 2px 6px rgba(20,24,33,.08);
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--ink-950);
+  color: var(--text);
+  font-family: var(--sans);
+  line-height: 1.5;
+  font-size: 14.5px;
+}
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+p { margin: 0 0 var(--sp-2); color: var(--text-muted); }
+a { color: var(--signal); }
+.text-muted { color: var(--text-muted); }
+.small { font-size: .8rem; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* Eyebrow — a panel label, not decoration: names the instrument. */
+.eyebrow {
+  font-family: var(--mono);
+  font-size: .7rem;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+.eyebrow::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+/* ==========================================================================
+   Layout
+   ========================================================================== */
+.wrap { max-width: 1040px; margin-inline: auto; padding-inline: var(--sp-4); }
+.stack { display: flex; flex-direction: column; gap: var(--sp-4); padding-block: var(--sp-4) var(--sp-6); }
+.grid-2 { display: grid; grid-template-columns: 1fr; gap: var(--sp-4); }
+@media (min-width: 860px) {
+  .grid-2 { grid-template-columns: 1fr 1fr; align-items: start; }
+}
+.grid-auto { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-4); }
+
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  background: color-mix(in srgb, var(--ink-950) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.topbar-inner { display: flex; align-items: center; gap: var(--sp-4); padding-block: var(--sp-3); flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: var(--sp-2); font-family: var(--mono); font-weight: 600; font-size: .95rem; color: var(--text); }
+.brand svg { color: var(--signal); flex-shrink: 0; }
+.statusline { display: flex; gap: var(--sp-4); flex-wrap: wrap; flex: 1; font-family: var(--mono); font-size: .78rem; }
+.topbar-actions { display: flex; gap: var(--sp-2); margin-left: auto; }
+
+.panel {
+  background: var(--ink-900);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--sp-5);
+  box-shadow: var(--shadow-1);
+}
+.panel--alert { border-color: var(--err); background: var(--err-weak); }
+.panel h2 { font-size: .92rem; font-weight: 600; }
+
+/* ==========================================================================
+   Status readout (indicator lights, not soft pills)
+   ========================================================================== */
+.readout { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.lamp { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); flex-shrink: 0; }
+.lamp--ok { background: var(--ok); box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 70%, transparent); }
+.lamp--warn { background: var(--warn); box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 70%, transparent); }
+.lamp--err { background: var(--err); box-shadow: 0 0 6px color-mix(in srgb, var(--err) 70%, transparent); }
+.lamp--pulse { animation: lamp-pulse 1.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes lamp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+}
+.stat { color: var(--text-muted); }
+.stat strong { color: var(--text); font-weight: 600; }
+
+/* ==========================================================================
+   Forms
+   ========================================================================== */
+.field { display: flex; flex-direction: column; gap: var(--sp-1); font-size: .85rem; }
+.field > span { color: var(--text-muted); }
+input, select, textarea {
+  font: inherit; padding: .5rem .65rem; border: 1px solid var(--line);
+  border-radius: var(--r-sm); background: var(--ink-800); color: var(--text);
+  width: 100%;
+}
+input:focus-visible { border-color: var(--signal); }
+input[readonly] { color: var(--text-muted); }
+.field-error { color: var(--err); font-size: .8rem; margin-top: var(--sp-1); }
+.inline-form { display: flex; gap: var(--sp-2); flex-wrap: wrap; align-items: flex-end; }
+.inline-form input { flex: 1; min-width: 220px; }
+.copy-row { display: flex; gap: var(--sp-1); }
+.copy-row input { font-family: var(--mono); }
+.row-between { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); margin-top: var(--sp-3); flex-wrap: wrap; }
+.switch-row { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-4); font-size: .88rem; padding-block: var(--sp-1); }
+.switch-row input { width: 1.1rem; height: 1.1rem; accent-color: var(--signal); flex-shrink: 0; }
+.divider { border: none; border-top: 1px solid var(--line); margin: var(--sp-5) 0; }
+
+/* ==========================================================================
+   Buttons
+   ========================================================================== */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
+  font: inherit; font-weight: 500; font-size: .85rem; padding: .5rem .85rem; border-radius: var(--r-sm);
+  border: 1px solid var(--line); cursor: pointer; background: var(--ink-800); color: var(--text);
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.btn svg { flex-shrink: 0; }
+.btn:hover { border-color: var(--line-strong); background: var(--ink-700); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn--primary { background: var(--signal); border-color: var(--signal); color: var(--signal-ink); font-weight: 600; }
+.btn--primary:hover { background: var(--signal-strong); border-color: var(--signal-strong); }
+.btn--danger { color: var(--err); }
+.btn--danger:hover { border-color: var(--err); }
+.btn--ghost { background: transparent; border-color: transparent; }
+.btn--ghost:hover { background: var(--ink-800); border-color: var(--line); }
+.btn--block { width: 100%; }
+.btn--icon { padding: .45rem; }
+.btn.is-copied { color: var(--ok); border-color: var(--ok); }
+
+/* ==========================================================================
+   Login
+   ========================================================================== */
+.login-shell { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: var(--sp-4); }
+.login-card { width: 100%; max-width: 340px; }
+.login-brand { display: flex; align-items: center; gap: var(--sp-2); font-family: var(--mono); font-weight: 600; margin-bottom: var(--sp-1); }
+.login-brand svg { color: var(--signal); }
+
+/* ==========================================================================
+   Setup wizard
+   ========================================================================== */
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-4); counter-reset: step; }
+.steps > li { padding-left: 2rem; position: relative; }
+.steps > li::before {
+  counter-increment: step; content: counter(step);
+  position: absolute; left: 0; top: 0;
+  width: 1.4rem; height: 1.4rem; border-radius: var(--r-sm);
+  background: var(--ink-800); border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: .75rem; color: var(--text-muted);
+}
+.checklist { margin: var(--sp-2) 0 0; padding-left: 1.1rem; color: var(--text-muted); font-size: .82rem; }
+.checklist li { margin-bottom: var(--sp-1); }
+.checklist code { font-family: var(--mono); background: var(--ink-800); padding: .1em .35em; border-radius: var(--r-sm); }
+
+/* ==========================================================================
+   Connection / device code
+   ========================================================================== */
+.account-row { display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-4); }
+.avatar {
+  width: 36px; height: 36px; border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--signal) 18%, var(--ink-800));
+  color: var(--signal-strong);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-weight: 600; flex-shrink: 0;
+}
+.account-name { font-weight: 600; }
+.account-address { font-family: var(--mono); font-size: .82rem; }
+.token-life { margin: var(--sp-4) 0; }
+.token-life-bar { height: 3px; background: var(--ink-800); border-radius: var(--r-pill); overflow: hidden; }
+.token-life-fill { height: 100%; background: var(--signal); width: 100%; transition: width 1s linear; }
+.token-life-label { font-family: var(--mono); font-size: .75rem; }
+
+.alert-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); flex-wrap: wrap; }
+
+.terminal {
+  background: var(--ink-950); border: 1px solid var(--line-strong); border-radius: var(--r-md);
+  padding: var(--sp-5); text-align: center; display: flex; flex-direction: column; align-items: center; gap: var(--sp-3);
+  position: relative; overflow: hidden;
+}
+.step-label { font-family: var(--mono); font-size: .78rem; color: var(--text-faint); letter-spacing: .04em; margin: 0; }
+.device-code-box {
+  display: flex; align-items: center; gap: var(--sp-3);
+  border: 1px dashed var(--line-strong); border-radius: var(--r-sm);
+  padding: var(--sp-3) var(--sp-5);
+}
+#device-code-value {
+  font-family: var(--mono); font-size: clamp(1.6rem, 5vw, 2.25rem); font-weight: 600; letter-spacing: .16em; color: var(--signal-strong);
+}
+.indeterminate-bar { width: 100%; max-width: 260px; height: 2px; background: var(--ink-800); border-radius: var(--r-pill); overflow: hidden; }
+.indeterminate-bar div { width: 30%; height: 100%; background: var(--signal); border-radius: var(--r-pill); }
+@media (prefers-reduced-motion: no-preference) {
+  .indeterminate-bar div { animation: slide 1.5s ease-in-out infinite; }
+  @keyframes slide { 0% { transform: translateX(-120%); } 100% { transform: translateX(430%); } }
+}
+
+/* ==========================================================================
+   Snippets
+   ========================================================================== */
+.segmented { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden; margin-bottom: var(--sp-2); }
+.segmented-btn { font: inherit; font-family: var(--mono); font-size: .78rem; padding: .4rem .75rem; border: none; background: var(--ink-800); color: var(--text-muted); cursor: pointer; }
+.segmented-btn.is-active { background: var(--signal); color: var(--signal-ink); }
+.snippet {
+  background: var(--ink-950); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: var(--sp-3); font-family: var(--mono); font-size: .8rem; overflow-x: auto; white-space: pre; margin: 0;
+}
+
+/* ==========================================================================
+   Live feed — a system log, not a social feed
+   ========================================================================== */
+.feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; max-height: 420px; overflow-y: auto; }
+.feed-row {
+  display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-1); border-bottom: 1px solid var(--line); font-size: .8rem; cursor: pointer;
+}
+.feed-row:last-child { border-bottom: none; }
+.feed-row:hover { background: var(--ink-800); }
+.feed-time { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text-faint); }
+.feed-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed-status { color: var(--text-muted); font-family: var(--mono); font-size: .76rem; }
+.feed-detail { grid-column: 1 / -1; color: var(--text-muted); font-family: var(--mono); white-space: pre-wrap; padding: var(--sp-2) 0 0; font-size: .76rem; }
+.feed-empty { color: var(--text-faint); font-size: .85rem; padding: var(--sp-3) 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .feed-row { animation: fade-in var(--dur) var(--ease); }
+  @keyframes fade-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+}
+
+/* ==========================================================================
+   Tables
+   ========================================================================== */
+.table-scroll { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.table th { text-align: left; color: var(--text-faint); font-family: var(--mono); font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; font-weight: 500; padding: var(--sp-2); border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table td { padding: var(--sp-2); border-bottom: 1px solid var(--line); vertical-align: middle; }
+.table tr:last-child td { border-bottom: none; }
+.table .actions { display: flex; gap: var(--sp-1); justify-content: flex-end; }
+
+/* ==========================================================================
+   Toasts
+   ========================================================================== */
+.toasts { position: fixed; top: var(--sp-4); right: var(--sp-4); z-index: 100; display: flex; flex-direction: column; gap: var(--sp-2); }
+.toast {
+  background: var(--ink-800); border: 1px solid var(--line-strong); border-left: 3px solid var(--ok);
+  border-radius: var(--r-sm); box-shadow: var(--shadow-2); padding: var(--sp-3) var(--sp-4); font-size: .85rem; max-width: 320px;
+}
+.toast--err { border-left-color: var(--err); }
+
+@media (max-width: 640px) {
+  .topbar-inner { flex-direction: column; align-items: flex-start; }
+  .topbar-actions { margin-left: 0; }
+}

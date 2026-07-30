@@ -1,0 +1,37 @@
+services:
+  bridge:
+    build: .
+    image: outlook-oauth-bridge:local
+    container_name: outlook-oauth-bridge
+    init: true
+    restart: unless-stopped
+    # Matches index.js's 30s shutdown drain window, plus a margin for Docker
+    # to actually deliver SIGTERM and reap the process.
+    stop_grace_period: 35s
+    ports:
+      - "2525:2525"
+      - "8080:8080"
+      # On a multi-homed host, bind to a specific interface instead of
+      # exposing the relay on every interface, e.g.:
+      # - "192.168.1.10:2525:2525"
+      # - "192.168.1.10:8080:8080"
+    volumes:
+      # Named volume by default: Docker seeds its ownership from the
+      # image's /data (uid 1000), so it's writable with no extra setup. A
+      # bind mount here needs `sudo chown -R 1000:1000 <your-dir>` first —
+      # see the README.
+      - bridge-data:/data
+    environment:
+      TZ: ${TZ:-UTC}
+    env_file:
+      - path: .env
+        required: false
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  bridge-data:

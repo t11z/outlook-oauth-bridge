@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>outlook-oauth-bridge</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+<!-- Login -->
+<section id="view-login" class="login-shell" hidden>
+  <form id="login-form" class="panel login-card" autocomplete="off">
+    <div class="login-brand">
+      <svg viewBox="0 0 24 14" width="22" height="13" aria-hidden="true"><circle cx="3.5" cy="7" r="2.3" fill="currentColor"/><circle cx="20.5" cy="7" r="2.3" fill="currentColor"/><path d="M6 7h12" stroke="currentColor" stroke-width="1.6" stroke-dasharray="1.6 2.2" stroke-linecap="round"/></svg>
+      <span>outlook-oauth-bridge</span>
+    </div>
+    <p>Enter the password printed in the container logs on first run.</p>
+    <label class="field">
+      <span>Password</span>
+      <input id="login-password" type="password" autocomplete="current-password" required />
+    </label>
+    <button type="submit" class="btn btn--primary btn--block" style="margin-top: var(--sp-3)">Sign in</button>
+    <p id="login-error" class="field-error" hidden></p>
+  </form>
+</section>
+
+<!-- App shell -->
+<div id="view-app" hidden>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="brand">
+        <svg viewBox="0 0 24 14" width="24" height="14" aria-hidden="true"><circle cx="3.5" cy="7" r="2.3" fill="currentColor"/><circle cx="20.5" cy="7" r="2.3" fill="currentColor"/><path d="M6 7h12" stroke="currentColor" stroke-width="1.6" stroke-dasharray="1.6 2.2" stroke-linecap="round"/></svg>
+        <span>outlook-oauth-bridge</span>
+      </div>
+      <div class="statusline" id="statusline"></div>
+      <div class="topbar-actions">
+        <button id="theme-toggle" class="btn btn--ghost btn--icon" type="button" title="Toggle theme" aria-label="Toggle theme">
+          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="10" cy="10" r="7.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 2.8a7.2 7.2 0 0 1 0 14.4Z" fill="currentColor"/></svg>
+        </button>
+        <button id="logout-btn" class="btn btn--ghost" type="button">
+          <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M8 17H4.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1H8M13 14l4-4-4-4M17 10H7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Sign out
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap stack">
+
+    <!-- Setup wizard -->
+    <section id="card-setup" class="panel" hidden>
+      <div class="eyebrow">Setup</div>
+      <h2 style="margin-bottom: var(--sp-3)">Connect your Outlook.com account</h2>
+      <ol class="steps">
+        <li>
+          <strong>Register an Azure app</strong> (one-time, free) at
+          <a href="https://portal.azure.com" target="_blank" rel="noopener">portal.azure.com</a> &rarr; App registrations &rarr; New registration.
+          <ul class="checklist">
+            <li>Supported account types: <em>Personal Microsoft accounts only</em></li>
+            <li>Authentication &rarr; Advanced settings &rarr; <em>Allow public client flows</em> = Yes</li>
+            <li>No redirect URI needed &middot; no client secret needed</li>
+          </ul>
+        </li>
+        <li>
+          <strong>Paste the Application (client) ID</strong>
+          <form id="client-id-form" class="inline-form" style="margin-top: var(--sp-2)">
+            <input id="client-id-input" class="mono" type="text" placeholder="00000000-0000-0000-0000-000000000000" required />
+            <button type="submit" class="btn btn--primary">Save &amp; connect</button>
+          </form>
+        </li>
+      </ol>
+    </section>
+
+    <!-- Reconnect banner -->
+    <section id="card-reauth" class="panel panel--alert" hidden>
+      <div class="alert-row">
+        <div class="readout">
+          <span class="lamp lamp--err lamp--pulse"></span>
+          <div>
+            <strong>Reconnection needed</strong>
+            <p id="reauth-message" class="text-muted" style="margin: 0"></p>
+          </div>
+        </div>
+        <button id="reconnect-btn" class="btn btn--primary" type="button">Reconnect</button>
+      </div>
+    </section>
+
+    <div class="grid-2">
+      <!-- Connection / device code -->
+      <section id="card-connection" class="panel" hidden>
+        <div class="eyebrow">Connection</div>
+
+        <div id="connection-connected" hidden>
+          <div class="account-row">
+            <div class="avatar" id="account-avatar"></div>
+            <div>
+              <div id="account-name" class="account-name"></div>
+              <div id="account-address" class="account-address text-muted"></div>
+            </div>
+          </div>
+          <div class="token-life">
+            <div class="token-life-bar"><div id="token-life-fill" class="token-life-fill"></div></div>
+            <span id="token-life-label" class="token-life-label text-muted"></span>
+          </div>
+          <button id="disconnect-btn" class="btn btn--danger btn--ghost" type="button">Disconnect</button>
+        </div>
+
+        <div id="device-code-panel" class="terminal" hidden>
+          <p class="step-label">01 &middot; Open the sign-in page</p>
+          <a id="device-code-link" class="btn btn--primary" href="#" target="_blank" rel="noopener">
+            Open microsoft.com/link
+            <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M8 5H4.5a1 1 0 0 0-1 1v9.5a1 1 0 0 0 1 1H14a1 1 0 0 0 1-1V12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 3h6v6M17 3l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+          <p class="step-label">02 &middot; Enter this code</p>
+          <div class="device-code-box">
+            <span id="device-code-value" class="mono">&nbsp;</span>
+            <button id="device-code-copy" class="btn btn--ghost btn--icon" type="button" title="Copy code" aria-label="Copy code">
+              <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><rect x="7" y="7" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4 13V5a1 1 0 0 1 1-1h8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+          <div class="indeterminate-bar"><div></div></div>
+          <p class="text-muted small" style="margin: 0">Waiting for sign-in &middot; code expires in <span id="device-code-countdown" class="mono">15:00</span></p>
+          <p class="text-muted small" style="margin: 0">Microsoft asks you to sign in again on that page even if you're already signed in elsewhere &mdash; expected for personal accounts.</p>
+          <button id="device-code-cancel" class="btn btn--ghost" type="button">Cancel</button>
+        </div>
+      </section>
+
+      <!-- Client configuration -->
+      <section id="card-client-config" class="panel" hidden>
+        <div class="eyebrow">SMTP client</div>
+        <div class="grid-auto">
+          <label class="field">
+            <span>Host</span>
+            <div class="copy-row"><input id="cfg-host" type="text" readonly /><button class="btn btn--ghost btn--icon copy-btn" data-copy-target="cfg-host" type="button" aria-label="Copy host"></button></div>
+          </label>
+          <label class="field">
+            <span>Port</span>
+            <div class="copy-row"><input id="cfg-port" type="text" readonly /><button class="btn btn--ghost btn--icon copy-btn" data-copy-target="cfg-port" type="button" aria-label="Copy port"></button></div>
+          </label>
+          <label class="field">
+            <span>Username</span>
+            <div class="copy-row"><input id="cfg-user" type="text" readonly /><button class="btn btn--ghost btn--icon copy-btn" data-copy-target="cfg-user" type="button" aria-label="Copy username"></button></div>
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <div class="copy-row">
+              <input id="cfg-pass" type="password" readonly />
+              <button id="cfg-pass-reveal" class="btn btn--ghost btn--icon" type="button" title="Show/hide" aria-label="Show or hide password"></button>
+              <button class="btn btn--ghost btn--icon copy-btn" data-copy-target="cfg-pass" type="button" aria-label="Copy password"></button>
+            </div>
+          </label>
+        </div>
+        <div class="row-between">
+          <button id="smtp-regen-btn" class="btn btn--ghost" type="button">Regenerate SMTP password</button>
+        </div>
+
+        <div class="snippet-picker" style="margin-top: var(--sp-4)">
+          <div class="segmented" id="snippet-tabs">
+            <button class="segmented-btn is-active" data-snippet="generic" type="button">Generic</button>
+            <button class="segmented-btn" data-snippet="python" type="button">Python</button>
+          </div>
+          <pre id="snippet-output" class="snippet"></pre>
+        </div>
+      </section>
+    </div>
+
+    <!-- Test mail -->
+    <section id="card-test-mail" class="panel" hidden>
+      <div class="eyebrow">Test</div>
+      <form id="test-mail-form" class="inline-form">
+        <label class="field" style="flex: 1; min-width: 220px">
+          <span>Send a test mail to</span>
+          <input id="test-mail-to" type="email" placeholder="you@example.com" required />
+        </label>
+        <button type="submit" class="btn btn--primary">Send</button>
+      </form>
+      <p id="test-mail-result" class="text-muted small" style="margin-top: var(--sp-2)"></p>
+    </section>
+
+    <!-- Live feed -->
+    <section id="card-feed" class="panel">
+      <div class="eyebrow">Activity</div>
+      <ol id="feed-list" class="feed" aria-live="polite"></ol>
+      <p id="feed-empty" class="feed-empty">No activity yet.</p>
+    </section>
+
+    <div class="grid-2">
+      <!-- Queue -->
+      <section id="card-queue" class="panel" hidden>
+        <div class="eyebrow">Queue</div>
+        <div class="table-scroll">
+          <table class="table" id="queue-table">
+            <thead><tr><th>Subject</th><th>Attempts</th><th>Next</th><th></th></tr></thead>
+            <tbody id="queue-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Dead letters -->
+      <section id="card-dead" class="panel" hidden>
+        <div class="eyebrow">Dead letters</div>
+        <div class="table-scroll">
+          <table class="table" id="dead-table">
+            <thead><tr><th>Subject</th><th>Reason</th><th></th></tr></thead>
+            <tbody id="dead-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- Settings -->
+    <section id="card-settings" class="panel">
+      <div class="eyebrow">Settings</div>
+      <form id="settings-form" class="stack" style="padding: 0; gap: var(--sp-3)">
+        <label class="switch-row">
+          <span>Rewrite From to the connected account</span>
+          <input id="setting-fromRewrite" type="checkbox" />
+        </label>
+        <label class="switch-row">
+          <span>Require TLS (STARTTLS) for SMTP &mdash; takes effect after restart</span>
+          <input id="setting-requireTls" type="checkbox" />
+        </label>
+        <div class="grid-auto">
+          <label class="field"><span>Rate limit / minute</span><input id="setting-rateLimitPerMin" type="number" min="1" /></label>
+          <label class="field"><span>Rate limit / day</span><input id="setting-rateLimitPerDay" type="number" min="1" /></label>
+          <label class="field"><span>Max queue depth</span><input id="setting-maxQueueDepth" type="number" min="1" /></label>
+          <label class="field"><span>Queue max age (hours)</span><input id="setting-queueMaxAgeHours" type="number" min="1" /></label>
+        </div>
+        <button type="submit" class="btn btn--primary" style="align-self: flex-start">Save settings</button>
+      </form>
+
+      <hr class="divider" />
+
+      <form id="password-form" class="stack" style="padding: 0; gap: var(--sp-3)">
+        <h3>Change web GUI password</h3>
+        <label class="field"><span>Current password</span><input id="pw-current" type="password" required /></label>
+        <label class="field"><span>New password (min. 12 characters)</span><input id="pw-next" type="password" minlength="12" required /></label>
+        <button type="submit" class="btn btn--primary" style="align-self: flex-start">Change password</button>
+      </form>
+    </section>
+
+  </main>
+</div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
