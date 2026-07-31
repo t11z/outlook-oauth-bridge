@@ -367,6 +367,19 @@ function renderSettings() {
     const s = dashboard.settings;
     $('setting-fromRewrite').checked = s.fromRewrite;
     $('setting-requireTls').checked = s.requireTls;
+    // Falls back to 2525 for a state.json predating this setting. If the
+    // current value isn't one of the standard options (e.g. a custom
+    // BRIDGE_SMTP_PORT from before this setting existed), add it rather than
+    // silently snapping the dropdown to 2525 and risking a resave reverting it.
+    const portSelect = $('setting-smtpPort');
+    const portValue = String(s.smtpPort || 2525);
+    if (!Array.from(portSelect.options).some((o) => o.value === portValue)) {
+        const opt = document.createElement('option');
+        opt.value = portValue;
+        opt.textContent = `${portValue} (current)`;
+        portSelect.appendChild(opt);
+    }
+    portSelect.value = portValue;
     $('setting-rateLimitPerMin').value = s.rateLimitPerMin;
     $('setting-rateLimitPerDay').value = s.rateLimitPerDay;
     $('setting-maxQueueDepth').value = s.maxQueueDepth;
@@ -673,6 +686,7 @@ function wireForms() {
         const patch = {
             fromRewrite: $('setting-fromRewrite').checked,
             requireTls: $('setting-requireTls').checked,
+            smtpPort: Number($('setting-smtpPort').value),
             rateLimitPerMin: Number($('setting-rateLimitPerMin').value),
             rateLimitPerDay: Number($('setting-rateLimitPerDay').value),
             maxQueueDepth: Number($('setting-maxQueueDepth').value),
@@ -681,8 +695,23 @@ function wireForms() {
         try {
             const res = await api('/api/settings', { method: 'POST', body: patch });
             dashboard.settings = res.settings;
+            // Deliberately not touching dashboard.smtp.port / renderClientConfig()
+            // here: the SMTP client card's port, snippets, and copy buttons must
+            // keep showing the port actually listening right now, not the
+            // pending one — nothing is reachable on the new port until restart.
             toast('Settings saved.');
         } catch (err) {
+            toast(err.message, { error: true });
+        }
+    });
+
+    $('restart-btn').addEventListener('click', async () => {
+        $('restart-btn').disabled = true;
+        try {
+            await api('/api/system/restart', { method: 'POST' });
+            toast('Restarting — this page will reconnect once it comes back up.');
+        } catch (err) {
+            $('restart-btn').disabled = false;
             toast(err.message, { error: true });
         }
     });

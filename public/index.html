@@ -223,6 +223,16 @@
           <span>Require TLS (STARTTLS) for SMTP &mdash; takes effect after restart</span>
           <input id="setting-requireTls" type="checkbox" />
         </label>
+        <label class="field">
+          <span>SMTP listen port &mdash; takes effect after restart</span>
+          <select id="setting-smtpPort">
+            <option value="2525">2525 (default)</option>
+            <option value="587">587 (Submission &mdash; needs root or a capability grant in Docker)</option>
+          </select>
+        </label>
+        <p class="text-muted small" style="margin: 0">
+          If you're running in Docker, also update the port mapping in <code>docker-compose.yml</code> to match &mdash; see the README's "Privileged ports" section.
+        </p>
         <div class="grid-auto">
           <label class="field"><span>Rate limit / minute</span><input id="setting-rateLimitPerMin" type="number" min="1" /></label>
           <label class="field"><span>Rate limit / day</span><input id="setting-rateLimitPerDay" type="number" min="1" /></label>
@@ -231,6 +241,13 @@
         </div>
         <button type="submit" class="btn btn--primary" style="align-self: flex-start">Save settings</button>
       </form>
+
+      <div class="row-between">
+        <p class="text-muted small" style="margin: 0; max-width: 48ch">
+          Restarting applies changes that need it (SMTP port, Require TLS). Only actually restarts if this is running under something that restarts it automatically &mdash; Docker's <code>restart: unless-stopped</code>, systemd, etc. &mdash; otherwise it just stops.
+        </p>
+        <button id="restart-btn" class="btn btn--ghost" type="button">Restart bridge</button>
+      </div>
 
       <hr class="divider" />
 

@@ -190,6 +190,11 @@ function defaultState() {
                 // Takes effect on next boot only — the SMTP listener's
                 // TLS/STARTTLS wiring is set up once at construction time.
                 requireTls: false,
+                // Seeded from BRIDGE_SMTP_PORT once, here, on first run only.
+                // After that state.json is authoritative — see oauth.clientId
+                // for the same pattern. Also takes effect on next boot only,
+                // for the same reason as requireTls: the listener binds once.
+                smtpPort: config.smtpPort,
             },
             counters: { sent: 0, failed: 0, dead: 0 },
         },
