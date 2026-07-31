@@ -8,13 +8,14 @@ import { events } from './events.js';
 import { queue } from './queue.js';
 import * as smtp from './smtp.js';
 import * as web from './web/server.js';
+import { shutdown } from './shutdown.js';
 
 function printFirstRunBanner(generated) {
     const lines = [
         'outlook-oauth-bridge — first run',
         `Web GUI : http://<host>:${config.httpPort}`,
         `Password: ${generated.webPassword}`,
-        `SMTP    : <host>:${config.smtpPort}  (STARTTLS off)`,
+        `SMTP    : <host>:${smtp.configuredPort()}  (STARTTLS off)`,
         `Username: bridge`,
         `Password: ${generated.smtpPassword}`,
         'This block is printed only once. Save it now.',
@@ -26,26 +27,6 @@ function printFirstRunBanner(generated) {
         process.stdout.write(`║ ${line.padEnd(width - 1)}║\n`);
     }
     process.stdout.write(`╚${bar}╝\n\n`);
-}
-
-let shuttingDown = false;
-
-async function shutdown(signal) {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    events.emitEvent('shutdown', { signal });
-
-    // Stop accepting new SMTP connections, let whatever the queue is
-    // mid-send finish, then stop the web GUI. Bounded so a stuck send
-    // can't block the container from ever stopping.
-    const drain = (async () => {
-        await smtp.stop();
-        await queue.stop();
-        await web.stop();
-    })();
-    await Promise.race([drain, new Promise((resolve) => setTimeout(resolve, 30_000))]);
-
-    process.exit(0);
 }
 
 async function bootstrap() {
@@ -67,10 +48,11 @@ async function bootstrap() {
     events.emitEvent('boot', { instanceId: store.state.instanceId, firstRun });
 
     // smtp.start() throws synchronously if settings.requireTls is on
-    // without real certs configured (see smtp.js) — that must reach
-    // bootstrap().catch and exit 1 rather than silently falling back to a
-    // self-signed cert, so it is called directly here, not wrapped.
-    smtp.start();
+    // without real certs configured, and rejects if the configured SMTP
+    // port can't be bound (e.g. a privileged port with no permission) —
+    // both must reach bootstrap().catch and exit 1 with a clear message
+    // rather than a bare stack trace or a silently half-started server.
+    await smtp.start();
     await queue.start();
     await web.start();
 

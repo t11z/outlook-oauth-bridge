@@ -54,7 +54,7 @@ The GUI's **SMTP client** panel shows host/port/username/password with copy butt
 | | |
 |---|---|
 | Host | your Docker host's address |
-| Port | `2525` (see [Port 25](#port-25) if you need the real port 25) |
+| Port | `2525` (see [Privileged ports](#privileged-ports) if you want 25/587) |
 | Encryption | None (or STARTTLS if you've enabled `requireTls` — see below) |
 | Auth | the generated `bridge` username + password |
 
@@ -62,16 +62,20 @@ The GUI's **SMTP client** panel shows host/port/username/password with copy butt
 
 All settings are in `.env` (copy from `.env.example`) — see that file for the full list with comments. The only one you need to set is `BRIDGE_CLIENT_ID`. Everything else has a sensible default.
 
-Most day-to-day settings (rate limits, queue size/age, From-rewrite, TLS requirement) are changed in the web GUI instead of `.env` — they live in `/data/state.json` and take effect immediately, except `requireTls`, which takes effect on next restart (see [TLS](#tls-starttls) below).
+Most day-to-day settings (rate limits, queue size/age, From-rewrite, TLS requirement, SMTP listen port) are changed in the web GUI instead of `.env` — they live in `/data/state.json` and take effect immediately, except `requireTls` and the SMTP port, which take effect on next restart (see [TLS](#tls-starttls) and [Privileged ports](#privileged-ports) below). The Settings panel's **Restart bridge** button applies those without needing shell access — it only actually restarts the process if something supervises it and brings it back (Docker's `restart: unless-stopped`, systemd, ...); under a bare `npm start` it just stops.
 
-### Port 25
+### Privileged ports
 
-The container listens on `2525` internally, not `25` — binding a privileged port needs root, which is a bad trade for a LAN relay. If a device insists on port 25, map it at the host in `docker-compose.yml`:
+The container listens on `2525` internally by default, not `25` or `587` — binding a port below 1024 needs root or the `NET_BIND_SERVICE` capability, and this image deliberately runs as a non-root user (see the Dockerfile). Two ways to get a standard port, depending on what you need:
 
-```yaml
-ports:
-  - "25:2525"
-```
+- **Just want a device to connect on the standard port?** Leave the internal port at `2525` and map it at the host instead — no app changes needed:
+  ```yaml
+  ports:
+    - "25:2525"   # or "587:2525"
+  ```
+- **Want the container itself to actually bind 587?** Select it in the GUI's Settings (**SMTP listen port**) and restart. This only works if the container can bind privileged ports — either run it as root (`user: "0"` in `docker-compose.yml`, not recommended) or grant the capability yourself (`cap_add: [NET_BIND_SERVICE]` plus a Node binary built with `setcap cap_net_bind_service=+ep` on it — not shipped by default, since it can't be verified to work reliably across every Docker/kernel combination). Without one of those, the container will exit on boot with a clear "permission denied" message rather than crash-looping silently. **You must also update `docker-compose.yml`'s port mapping to match** whatever internal port you pick — the two are independent.
+
+`465` (SMTPS / implicit TLS) is not offered as an option. This server always speaks plaintext-with-optional-STARTTLS (`secure: false`, see [TLS](#tls-starttls)); a client connecting to 465 expects an immediate TLS handshake and the connection would just fail. Implementing real implicit TLS is future work, not a configuration flag.
 
 ### TLS (STARTTLS)
 

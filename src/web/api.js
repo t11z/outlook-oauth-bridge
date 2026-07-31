@@ -3,13 +3,18 @@ import { events } from '../events.js';
 import { queue } from '../queue.js';
 import * as oauth from '../oauth.js';
 import { config, SESSION_MAX_AGE_SECONDS } from '../config.js';
-import { spoolProcessedMessage } from '../smtp.js';
+import { spoolProcessedMessage, configuredPort } from '../smtp.js';
+import { shutdown } from '../shutdown.js';
 import { createSession, verifySession, csrfTokenFor, timingSafeEqualToken, isLoginLocked, loginLockRemainingMs, recordLoginFailure, recordLoginSuccess } from './session.js';
 
 const SESSION_COOKIE = 'oob_session';
 const LOGIN_PAD_MS = 250;
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-const EDITABLE_SETTINGS = new Set(['fromRewrite', 'rateLimitPerMin', 'rateLimitPerDay', 'maxQueueDepth', 'queueMaxAgeHours', 'requireTls']);
+const EDITABLE_SETTINGS = new Set(['fromRewrite', 'rateLimitPerMin', 'rateLimitPerDay', 'maxQueueDepth', 'queueMaxAgeHours', 'requireTls', 'smtpPort']);
+// 465 (SMTPS/implicit TLS) is deliberately not offered — smtp.js hardcodes
+// secure: false, so a port expecting a TLS ClientHello on connect would just
+// break. Only ports this server can actually speak are listed here.
+const SMTP_PORT_OPTIONS = [2525, 587];
 
 function sendJson(res, status, body) {
     const data = JSON.stringify(body);
@@ -85,7 +90,7 @@ function projectState(csrfToken) {
         instanceId: s.instanceId,
         csrfToken,
         web: { passwordIsGenerated: s.web.passwordIsGenerated },
-        smtp: { username: s.smtp.username, password: s.smtp.password, port: config.smtpPort },
+        smtp: { username: s.smtp.username, password: s.smtp.password, port: configuredPort() },
         oauth: {
             clientId: oauth.currentClientId(),
             status: s.oauth.status,
@@ -236,11 +241,23 @@ async function handleSettingsPatch(req, res) {
     }
     if ('fromRewrite' in patch && typeof patch.fromRewrite !== 'boolean') return sendJson(res, 400, { error: 'invalid_fromRewrite' });
     if ('requireTls' in patch && typeof patch.requireTls !== 'boolean') return sendJson(res, 400, { error: 'invalid_requireTls' });
+    if ('smtpPort' in patch && !SMTP_PORT_OPTIONS.includes(patch.smtpPort)) return sendJson(res, 400, { error: 'invalid_smtpPort' });
     for (const field of ['rateLimitPerMin', 'rateLimitPerDay', 'maxQueueDepth', 'queueMaxAgeHours']) {
         if (field in patch && !(Number.isFinite(patch[field]) && patch[field] > 0)) return sendJson(res, 400, { error: `invalid_${field}` });
     }
     await store.mutate((s) => Object.assign(s.settings, patch));
     sendJson(res, 200, { settings: store.state.settings });
+}
+
+// Responds before tearing anything down — setImmediate gives the response a
+// turn of the event loop to actually flush before smtp/queue/web start
+// closing, so the caller reliably sees 202 rather than a dropped connection.
+// Only actually restarts the process if something supervises it and brings
+// it back (Docker's `restart: unless-stopped`, systemd, etc.) — under a bare
+// `npm start` this just exits, which the GUI can't detect or prevent.
+function handleRestart(req, res) {
+    sendJson(res, 202, { ok: true });
+    setImmediate(() => shutdown('restart-requested'));
 }
 
 async function handleQueueList(req, res) {
@@ -350,6 +367,7 @@ export async function handleApi(req, res, url) {
         if (req.method === 'POST' && pathname === '/api/password') return await handlePasswordChange(req, res);
         if (req.method === 'POST' && pathname === '/api/smtp/regenerate') return await handleSmtpRegenerate(req, res);
         if (req.method === 'POST' && pathname === '/api/settings') return await handleSettingsPatch(req, res);
+        if (req.method === 'POST' && pathname === '/api/system/restart') return handleRestart(req, res);
 
         if (req.method === 'GET' && pathname === '/api/queue') return await handleQueueList(req, res);
         if (req.method === 'POST' && pathname === '/api/test-mail') return await handleTestMail(req, res);

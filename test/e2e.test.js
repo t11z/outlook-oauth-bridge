@@ -67,7 +67,7 @@ before(async () => {
     smtp = await import('../src/smtp.js');
     web = await import('../src/web/server.js');
 
-    smtp.start();
+    await smtp.start();
     await queue.start();
     await web.start();
 
