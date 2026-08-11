@@ -62,7 +62,7 @@ The GUI's **SMTP client** panel shows host/port/username/password with copy butt
 
 All settings are in `.env` (copy from `.env.example`) — see that file for the full list with comments. The only one you need to set is `BRIDGE_CLIENT_ID`. Everything else has a sensible default.
 
-Most day-to-day settings (rate limits, queue size/age, From-rewrite, TLS requirement, SMTP listen port) are changed in the web GUI instead of `.env` — they live in `/data/state.json` and take effect immediately, except `requireTls` and the SMTP port, which take effect on next restart (see [TLS](#tls-starttls) and [Privileged ports](#privileged-ports) below). The Settings panel's **Restart bridge** button applies those without needing shell access — it only actually restarts the process if something supervises it and brings it back (Docker's `restart: unless-stopped`, systemd, ...); under a bare `npm start` it just stops.
+Most day-to-day settings (rate limits, queue size/age, From-rewrite, sender addresses, TLS requirement, SMTP listen port) are changed in the web GUI instead of `.env` — they live in `/data/state.json` and take effect immediately, except `requireTls` and the SMTP port, which take effect on next restart (see [TLS](#tls-starttls) and [Privileged ports](#privileged-ports) below). The Settings panel's **Restart bridge** button applies those without needing shell access — it only actually restarts the process if something supervises it and brings it back (Docker's `restart: unless-stopped`, systemd, ...); under a bare `npm start` it just stops.
 
 ### Privileged ports
 
@@ -83,6 +83,19 @@ STARTTLS is **off by default**, deliberately. Without a real certificate, `smtp-
 
 If you want STARTTLS: mount real certificate files, set `BRIDGE_TLS_KEY` / `BRIDGE_TLS_CERT` in `.env` to their paths, and enable **Require TLS** in the GUI's settings. The bridge refuses to start with `requireTls` on but no certs configured, rather than silently falling back to the self-signed cert — that fallback is exactly the failure mode this design avoids.
 
+### Sending from an alias
+
+Outlook.com lets you register multiple addresses to send from (aliases). The bridge can relay through them too, but the setup has an order that matters:
+
+1. **Enable the address in Outlook on the web first.** Go to Settings → Mail → Compose and reply → "Addresses to send from" and add/verify it there. The bridge has no way to do this for you, and no way to detect that you haven't — Microsoft doesn't expose a personal account's alias list over the API at all, so there's nothing to auto-discover.
+2. **Add the same address in the bridge's Settings** (Sender addresses), optionally with a display name used only when a device's message doesn't supply its own.
+3. **Probe it** from the Test panel — this sends a real message you compose (from and to addresses you choose) and asks you to check the inbox it lands in. This is the only way to know whether an alias actually works, because Microsoft doesn't publish this behavior and the bridge can't read a mailbox to check for you.
+4. **Point your device at it** — either by setting its own `From:` header to the alias (if it lets you), or its SMTP sender address / `MAIL FROM` (if that's the only field it exposes; the bridge reads that too when the `From:` header doesn't match a listed address).
+
+A device's `From:` that isn't a listed address is rewritten to the default sender and demoted to `Reply-To` — the same behavior as before this feature existed, so nothing already working (like a printer with a fixed `From: scanner@device.local`) breaks.
+
+There's an optional, experimental **"Try to force From to the alias"** switch. Turning it on makes the bridge take a slower, three-step Graph API path (create a draft, try to set its `from`, send it) instead of the normal one-step send, and it requires reconnecting the account to grant an extra permission (`Mail.ReadWrite` — read/write access to the whole mailbox, not just send). Whether Microsoft actually honors that forced `from` for a personal account's alias is undocumented and, per at least one public report, may not work at all — the bridge doesn't trust it either: it reads back what Graph says happened and remembers the answer, so it only pays for the extra round trips once. If it turns out not to work, mail still goes out (from the primary address, with the alias preserved as `Reply-To`) rather than failing.
+
 ### Lost password
 
 If you lose the web GUI password, set `BRIDGE_RESET_PASSWORD=1` in `.env`, restart the container once, and a new password is generated and printed to the logs the same way as first-run. Remove the env var again afterward (it regenerates the password on every boot while set).
@@ -100,17 +113,22 @@ Without this, the container exits on boot with a clear `EACCES` message rather t
 ## Honest limitations
 
 - **Messages over ~3 MiB are rejected (`552`).** Graph's `sendMail` MIME endpoint caps the base64 request body at 4 MiB; the raw-message budget after that encoding overhead is ~3 MiB. There's no chunked-upload fallback — this bridge is for small, dumb-device mail (scan notifications, alerts, status mail), not attachments.
-- **A message can duplicate under one specific failure mode.** `sendMail` has no idempotency key and a `202` response means "accepted," not "delivered." If the network request times out or resets *after* it may have reached Graph, a retry can send a duplicate — this is undetectable by design of the API. The bridge caps retries at 2 attempts specifically for this ambiguous failure class (vs. 8 for ordinary transient errors) to limit the blast radius, and tags it "may have been delivered" in the activity feed and dead-letter reason. It cannot be fully eliminated.
+- **A message can duplicate under one specific failure mode.** `sendMail` has no idempotency key and a `202` response means "accepted," not "delivered." If the network request times out or resets *after* it may have reached Graph, a retry can send a duplicate — this is undetectable by design of the API. The bridge caps retries at 2 attempts specifically for this ambiguous failure class (vs. 8 for ordinary transient errors) to limit the blast radius, and tags it "may have been delivered" in the activity feed and dead-letter reason. It cannot be fully eliminated. (The alias-forcing send path, when enabled, has a smaller version of this same risk on its first step — a timeout there can leave an unsent draft behind rather than a duplicate delivery, which is easier to notice and clean up.)
 - **Outlook.com has its own, unpublished sending limits** for personal accounts (daily recipient caps, per-hour throttles). A chatty script can trip these independently of the bridge's own rate limiting. If mail starts failing with `429`s, this is usually why.
 - **The SMTP and refresh-token credentials are stored in plaintext** in `/data/state.json` (mode `0600`, directory `0700`). Hashing the SMTP password would be theater — the same file holds the OAuth refresh token, which already grants full send-as access to the mailbox and is inherently at least as sensitive. Anyone with read access to the container's filesystem or a backup of the volume has both. There is no encryption-at-rest option in this version; if that matters for your threat model, encrypt the underlying disk/volume instead.
 - **No message receiving.** This is a send-only relay — no IMAP/POP, no inbound delivery.
 - **Retry timing (backoff waits) can't be meaningfully tested on Windows dev machines** the same way as on Linux, because Windows doesn't deliver real `SIGTERM` to child processes the way containers rely on — this only affects local development tooling, not the container itself, which runs on Linux.
+- **Sender aliases must be typed in by hand.** Graph's `GET /me` returns an empty alias list for a personal Outlook.com account (there's no `proxyAddresses`/`otherMails` to read), so there is nothing for the bridge to auto-discover, and that isn't likely to change.
+- **A `From:` that isn't a listed sender is silently rewritten to the default address**, with the original preserved as `Reply-To` — the same behavior the bridge has always had for any mismatched `From:`. It is not rejected, so an existing device with a hardcoded, unlisted `From:` keeps working exactly as before; the rewrite is visible in the activity feed.
+- **Whether Outlook.com actually honors a forced alias `From:` is undocumented and account-dependent.** The bridge can probe it and remember the answer, but it cannot make it work — see [Sending from an alias](#sending-from-an-alias). When it doesn't, mail still goes out from the primary address with the alias as `Reply-To`, rather than failing.
+- **The optional alias-forcing send path requests `Mail.ReadWrite`** — read/write access to the whole mailbox — instead of just `Mail.Send`. It's off by default and requires reconnecting to grant. Turn it on only if you actually need to try forcing the alias; leaving it off keeps the bridge's permissions minimal.
 
 ## Security
 
 - **The single largest risk is inherent to the product**: anyone who obtains the SMTP credential can send mail as your real Outlook identity, with valid SPF/DKIM/DMARC. Mitigations built in: authentication is always required (no configuration path disables it), credentials are strong and randomly generated, per-IP brute-force banning on both the SMTP and web GUI logins, rate limiting, and every send is visible in the live activity feed. Keep the container on a trusted network segment and don't port-forward the SMTP port to the internet.
 - **The web GUI runs over plain HTTP by default.** Put a TLS-terminating reverse proxy in front of it if it's reachable beyond a trusted LAN, and set `BRIDGE_TRUST_TLS=1` so the session cookie gets the `Secure` flag.
 - **Revoking access**: disconnecting in the GUI clears the local refresh token. To fully revoke it on Microsoft's side (e.g. after a suspected compromise), visit [account.live.com/consent/Manage](https://account.live.com/consent/Manage).
+- **Sender addresses and display names entered in the GUI are validated at the API boundary** (address shape, no control characters) before they can reach an outgoing message's headers — they're the one piece of header content that comes from the web GUI rather than a device's own message.
 - Full design rationale and threat model live in `ARCHITECTURE.md`.
 
 ## Development

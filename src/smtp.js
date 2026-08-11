@@ -6,7 +6,7 @@ import { config, MAX_MESSAGE_BYTES, MAX_RECIPIENTS, SMTP_BANNER } from './config
 import { store, generateId, spoolTmpPath, spoolTmpFileHandle, finalizeSpoolMessage } from './store.js';
 import { events } from './events.js';
 import { queue } from './queue.js';
-import { processOutgoingMessage } from './mime.js';
+import { processOutgoingMessage, normalizeAddress } from './mime.js';
 
 // Per-remote-IP auth failure tracking: 10 failures in 5 minutes bans that
 // IP for 15 minutes. Without this, a printer with a stale saved password
@@ -102,19 +102,57 @@ function onRcptTo(address, session, callback) {
     callback();
 }
 
+// A message's sender resolved to a genuine, user-listed alias may take the
+// three-call draft->PATCH->send path in graph.js instead of the ordinary
+// single-call /me/sendMail — but only when every one of these holds. Each
+// condition is a reason the common case (no aliases configured, or
+// aliasForceFrom off) stays on the original, unmodified send path:
+//   - aliasForceFrom is the explicit opt-in (off by default — see store.js)
+//   - a previous send hasn't already proven Graph won't honor it for this
+//     mailbox (oauth.aliasFromSupported === false)
+//   - the connection actually holds the Mail.ReadWrite scope the PATCH step
+//     needs (granted only once aliasForceFrom triggered a reconnect — see
+//     oauth.currentScope())
+//   - sender.matched is true: never force an address the user hasn't
+//     explicitly listed, even if selectSender's default fallback happened
+//     to equal it
+//   - the resolved address isn't just the account's own address again
+function aliasPathAvailable(sender, accountAddress) {
+    const s = store.state;
+    return Boolean(
+        s.settings.aliasForceFrom === true &&
+            s.oauth.aliasFromSupported !== false &&
+            (s.oauth.grantedScope || '').includes('Mail.ReadWrite') &&
+            sender.matched === true &&
+            sender.address &&
+            accountAddress &&
+            normalizeAddress(sender.address) !== normalizeAddress(accountAddress)
+    );
+}
+
 // Shared by SMTP ingress (onData, below) and the GUI's "send test mail"
 // endpoint (web/api.js): mime.js processing happens exactly once, here, at
 // receive time — never again on retry. That's what makes a "message queued"
 // response an honest promise: what gets accepted is exactly what gets sent,
 // even if the account or settings change before the queue gets to it later.
+// This now extends to the send PATH, not just the bytes: whether a message
+// takes the alias-forcing path in graph.js is decided here and persisted as
+// `sendAs`, because the degraded path writes different bytes (primary From +
+// alias Reply-To) than the forced path (alias From, no Reply-To) — the two
+// can't be decided independently without re-running mime.js on retry, which
+// is exactly what this invariant forbids.
 // Throws Error with `.reason` ('no_recipients') on the one rejectable case;
 // callers translate that into their own protocol (SMTP 554 vs HTTP 4xx).
 export async function spoolProcessedMessage({ raw, envelopeFrom, envelopeTo, id = generateId() }) {
     const account = store.state.oauth.account;
     const { mime, meta } = processOutgoingMessage(raw, {
         envelopeTo,
+        envelopeFrom,
         accountAddress: account?.address,
+        senderAddresses: store.state.settings.senderAddresses ?? [],
+        defaultSender: store.state.settings.defaultSender ?? null,
         fromRewrite: store.state.settings.fromRewrite,
+        aliasReplyToInsurance: store.state.settings.aliasForceFrom === true && store.state.oauth.aliasFromSupported !== true,
         bridgeId: id,
     });
 
@@ -123,6 +161,8 @@ export async function spoolProcessedMessage({ raw, envelopeFrom, envelopeTo, id 
         err.reason = 'no_recipients';
         throw err;
     }
+
+    const sendAs = aliasPathAvailable(meta.sender, account?.address) ? meta.sender.address : null;
 
     const messageMeta = {
         id,
@@ -137,11 +177,13 @@ export async function spoolProcessedMessage({ raw, envelopeFrom, envelopeTo, id 
         nextAttemptAt: Date.now(),
         lastError: null,
         reconcile: meta.reconcile,
+        sender: meta.sender,
+        sendAs,
     };
 
     await finalizeSpoolMessage(id, mime, messageMeta);
 
-    events.emitEvent('queued', { id, subject: messageMeta.subject, size: messageMeta.size, reconcile: messageMeta.reconcile });
+    events.emitEvent('queued', { id, subject: messageMeta.subject, size: messageMeta.size, reconcile: messageMeta.reconcile, sender: messageMeta.sender });
     await queue.notify(messageMeta);
 
     return messageMeta;

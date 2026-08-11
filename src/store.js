@@ -176,13 +176,47 @@ function defaultState() {
                 clientId: config.oauth.clientId,
                 refreshToken: null,
                 scope: config.oauth.scope,
+                // The scope Microsoft actually granted, from the token
+                // response (oauth.js's in-memory cache has this too, but
+                // never persisted it). Lets graph.js/smtp.js check whether
+                // Mail.ReadWrite was actually granted on a cold start,
+                // instead of discovering its absence as a 403 on the first
+                // alias-forcing send after a restart.
+                grantedScope: null,
                 account: null,
                 connectedAt: null,
                 status: 'unconfigured', // unconfigured | connecting | connected | needs_reauth
                 lastError: null,
+                // Whether a forced From (via the draft+PATCH+send path) has
+                // been observed to actually take effect on THIS mailbox.
+                // null = never probed/attempted. A property of the connected
+                // account, not of settings — cleared on disconnect and on
+                // switching to a different account (see oauth.js).
+                aliasFromSupported: null,
             },
             settings: {
                 fromRewrite: true,
+                // User-maintained: Graph's GET /me returns empty
+                // proxyAddresses/otherMails for a consumer account, so there
+                // is no alias list to auto-discover. Each address must ALSO
+                // be enabled in Outlook on the web (Settings > Mail >
+                // Compose and reply > "Addresses to send from") — listing it
+                // here only tells the bridge it's allowed to use it, it
+                // doesn't grant anything on Microsoft's side.
+                // Shape: [{ address, displayName }].
+                senderAddresses: [],
+                // null = the connected account's own address. A non-null
+                // value must be the primary or a member of senderAddresses
+                // (enforced in web/api.js).
+                defaultSender: null,
+                // Opt-in, default off. Makes graph.js take the three-call
+                // draft->PATCH->send path for a message whose sender resolved
+                // to an alias, AND makes oauth.js request the extra
+                // Mail.ReadWrite scope that path needs — a broader grant
+                // than this send-only relay otherwise needs, which is why
+                // it's off by default and requires reconnecting to take
+                // effect (see oauth.currentScope()).
+                aliasForceFrom: false,
                 rateLimitPerMin: DEFAULT_RATE_LIMIT_PER_MIN,
                 rateLimitPerDay: DEFAULT_RATE_LIMIT_PER_DAY,
                 maxQueueDepth: DEFAULT_MAX_QUEUE_DEPTH,

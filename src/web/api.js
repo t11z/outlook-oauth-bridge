@@ -2,7 +2,9 @@ import { store, verifyPassword, hashPassword, generateCredential, isValidId, rea
 import { events } from '../events.js';
 import { queue } from '../queue.js';
 import * as oauth from '../oauth.js';
-import { config, SESSION_MAX_AGE_SECONDS } from '../config.js';
+import * as graph from '../graph.js';
+import { normalizeAddress } from '../mime.js';
+import { config, SESSION_MAX_AGE_SECONDS, MAX_SENDER_ADDRESSES, MAX_SENDER_DISPLAY_NAME } from '../config.js';
 import { spoolProcessedMessage, configuredPort } from '../smtp.js';
 import { shutdown } from '../shutdown.js';
 import { createSession, verifySession, csrfTokenFor, timingSafeEqualToken, isLoginLocked, loginLockRemainingMs, recordLoginFailure, recordLoginSuccess } from './session.js';
@@ -10,11 +12,59 @@ import { createSession, verifySession, csrfTokenFor, timingSafeEqualToken, isLog
 const SESSION_COOKIE = 'oob_session';
 const LOGIN_PAD_MS = 250;
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-const EDITABLE_SETTINGS = new Set(['fromRewrite', 'rateLimitPerMin', 'rateLimitPerDay', 'maxQueueDepth', 'queueMaxAgeHours', 'requireTls', 'smtpPort']);
+const EDITABLE_SETTINGS = new Set([
+    'fromRewrite',
+    'senderAddresses',
+    'defaultSender',
+    'aliasForceFrom',
+    'rateLimitPerMin',
+    'rateLimitPerDay',
+    'maxQueueDepth',
+    'queueMaxAgeHours',
+    'requireTls',
+    'smtpPort',
+]);
 // 465 (SMTPS/implicit TLS) is deliberately not offered — smtp.js hardcodes
 // secure: false, so a port expecting a TLS ClientHello on connect would just
 // break. Only ports this server can actually speak are listed here.
 const SMTP_PORT_OPTIONS = [2525, 587];
+
+// Deliberately stricter than RFC 5322 and stricter than mime.js's
+// extractAddrSpec (which accepts anything containing '@'). We're strict
+// about what we EMIT into a From/Reply-To header and liberal about what we
+// MATCH against — the asymmetry is the point. Rejects angle brackets,
+// commas, quotes, whitespace and CR/LF, all of which could split or corrupt
+// a header line; requiring a dot after the '@' also rejects things like
+// user@localhost, which an Outlook.com alias can never be.
+const SENDER_ADDRESS_RE = /^[^\s<>,"@]+@[^\s<>,"@]+\.[^\s<>,"@]+$/;
+
+// Validates+normalizes settings.senderAddresses from a PATCH body. Returns
+// { value } on success or { error } naming the specific settings key that
+// failed, so handleSettingsPatch can report which field was wrong.
+function normalizeSenderAddresses(value) {
+    if (!Array.isArray(value) || value.length > MAX_SENDER_ADDRESSES) return { error: 'invalid_senderAddresses' };
+    const seen = new Set();
+    const out = [];
+    for (const entry of value) {
+        if (!entry || typeof entry !== 'object') return { error: 'invalid_senderAddresses' };
+        const address = typeof entry.address === 'string' ? entry.address.trim() : '';
+        if (!SENDER_ADDRESS_RE.test(address) || address.length > 320) return { error: 'invalid_senderAddresses' };
+
+        let displayName = null;
+        if (entry.displayName !== undefined && entry.displayName !== null) {
+            if (typeof entry.displayName !== 'string' || /[\r\n]/.test(entry.displayName) || entry.displayName.length > MAX_SENDER_DISPLAY_NAME) {
+                return { error: 'invalid_senderAddresses' };
+            }
+            displayName = entry.displayName.trim() || null;
+        }
+
+        const key = normalizeAddress(address);
+        if (seen.has(key)) continue; // dedupe, keep the first occurrence's casing
+        seen.add(key);
+        out.push({ address, displayName });
+    }
+    return { value: out };
+}
 
 function sendJson(res, status, body) {
     const data = JSON.stringify(body);
@@ -99,7 +149,17 @@ function projectState(csrfToken) {
             lastError: s.oauth.lastError,
             tokenExpiresAt: oauth.tokenStatus()?.expiresAt ?? null,
             pendingDeviceCode: oauth.pendingDeviceCode(),
+            // Lets the GUI tell whether a reconnect is needed to pick up
+            // Mail.ReadWrite after aliasForceFrom was turned on — scope is
+            // fixed at grant time, a refresh alone can't widen it.
+            grantedScope: s.oauth.grantedScope ?? null,
+            aliasFromSupported: s.oauth.aliasFromSupported ?? null,
         },
+        // Unlike `oauth` above, `settings` is exposed wholesale — there is
+        // nothing secret-shaped in it (unlike web.passwordHash,
+        // web.sessionSecret, oauth.refreshToken). Keep it that way: don't
+        // add a credential or token to settings without also switching this
+        // to field-by-field projection.
         settings: s.settings,
         counters: s.counters,
         queue: queue.status(),
@@ -242,11 +302,46 @@ async function handleSettingsPatch(req, res) {
     if ('fromRewrite' in patch && typeof patch.fromRewrite !== 'boolean') return sendJson(res, 400, { error: 'invalid_fromRewrite' });
     if ('requireTls' in patch && typeof patch.requireTls !== 'boolean') return sendJson(res, 400, { error: 'invalid_requireTls' });
     if ('smtpPort' in patch && !SMTP_PORT_OPTIONS.includes(patch.smtpPort)) return sendJson(res, 400, { error: 'invalid_smtpPort' });
+    if ('aliasForceFrom' in patch && typeof patch.aliasForceFrom !== 'boolean') return sendJson(res, 400, { error: 'invalid_aliasForceFrom' });
     for (const field of ['rateLimitPerMin', 'rateLimitPerDay', 'maxQueueDepth', 'queueMaxAgeHours']) {
         if (field in patch && !(Number.isFinite(patch[field]) && patch[field] > 0)) return sendJson(res, 400, { error: `invalid_${field}` });
     }
+
+    const accountAddr = store.state.oauth.account?.address ? normalizeAddress(store.state.oauth.account.address) : null;
+
+    if ('senderAddresses' in patch) {
+        const normalized = normalizeSenderAddresses(patch.senderAddresses);
+        if (normalized.error) return sendJson(res, 400, { error: normalized.error });
+        // The connected account's own address is always implicitly allowed —
+        // listing it again would be redundant and could shadow its own
+        // display name with one entered here by mistake.
+        patch.senderAddresses = accountAddr ? normalized.value.filter((e) => normalizeAddress(e.address) !== accountAddr) : normalized.value;
+    }
+
+    // Cross-field check runs against the MERGED result, not the pre-patch
+    // state — a single PATCH can change senderAddresses and defaultSender
+    // together.
+    const mergedSenderAddresses = 'senderAddresses' in patch ? patch.senderAddresses : (store.state.settings.senderAddresses ?? []);
+    const allowedAddresses = new Set([accountAddr, ...mergedSenderAddresses.map((e) => normalizeAddress(e.address))].filter(Boolean));
+
+    let defaultSenderReset = false;
+    if ('defaultSender' in patch) {
+        if (patch.defaultSender !== null && (typeof patch.defaultSender !== 'string' || !allowedAddresses.has(normalizeAddress(patch.defaultSender)))) {
+            return sendJson(res, 400, { error: 'invalid_defaultSender' });
+        }
+    } else if ('senderAddresses' in patch) {
+        // The address that WAS the default may have just been removed by
+        // this same patch. The user's intent is unambiguous (they removed
+        // it), so reset rather than reject a patch they never asked to fail.
+        const currentDefault = store.state.settings.defaultSender;
+        if (currentDefault && !allowedAddresses.has(normalizeAddress(currentDefault))) {
+            patch.defaultSender = null;
+            defaultSenderReset = true;
+        }
+    }
+
     await store.mutate((s) => Object.assign(s.settings, patch));
-    sendJson(res, 200, { settings: store.state.settings });
+    sendJson(res, 200, { settings: store.state.settings, defaultSenderReset: defaultSenderReset || undefined });
 }
 
 // Responds before tearing anything down — setImmediate gives the response a
@@ -309,8 +404,22 @@ async function handleTestMail(req, res) {
     if (!to.includes('@')) return sendJson(res, 400, { error: 'invalid_to' });
     if (store.state.oauth.status === 'unconfigured') return sendJson(res, 409, { error: 'not_connected' });
 
+    const accountAddr = store.state.oauth.account?.address ?? null;
+    let from = accountAddr;
+    if (typeof body.from === 'string' && body.from.trim()) {
+        const requested = body.from.trim();
+        const allowed = new Set(
+            [accountAddr, ...(store.state.settings.senderAddresses ?? []).map((e) => e.address)].filter(Boolean).map(normalizeAddress)
+        );
+        if (!allowed.has(normalizeAddress(requested))) return sendJson(res, 400, { error: 'invalid_from' });
+        from = requested;
+    }
+
+    // Carries an explicit From: header (unlike the plain body this endpoint
+    // used to send) so the test mail exercises the same sender-selection
+    // path a real device's message would.
     const raw = Buffer.from(
-        `Subject: outlook-oauth-bridge test mail\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n` +
+        `From: <${from}>\r\nSubject: outlook-oauth-bridge test mail\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n` +
             `This is a test message sent from the outlook-oauth-bridge web GUI at ${new Date().toISOString()}.\r\n`
     );
     try {
@@ -319,6 +428,46 @@ async function handleTestMail(req, res) {
     } catch (err) {
         sendJson(res, 400, { error: err.reason || 'failed', message: err.message });
     }
+}
+
+// Phase-1 alias verification (see graph.sendJsonProbe): a self-contained
+// probe message the bridge composes itself, needing no new scope. Rate
+// limited independently of queue.js's normal per-account limits — this
+// bypasses the queue entirely (it's synchronous, so the GUI can show the
+// real Graph response immediately) and shouldn't be hammered.
+let lastAliasProbeAt = 0;
+const ALIAS_PROBE_COOLDOWN_MS = 10_000;
+
+async function handleAliasProbe(req, res) {
+    const body = await readJsonBody(req);
+    const from = typeof body.address === 'string' ? body.address.trim() : '';
+    const to = typeof body.to === 'string' ? body.to.trim() : '';
+    if (!SENDER_ADDRESS_RE.test(from) || !to.includes('@')) return sendJson(res, 400, { error: 'invalid_request' });
+    if (store.state.oauth.status === 'unconfigured') return sendJson(res, 409, { error: 'not_connected' });
+
+    const now = Date.now();
+    if (now - lastAliasProbeAt < ALIAS_PROBE_COOLDOWN_MS) {
+        return sendJson(res, 429, { error: 'probe_cooldown', retryAfterMs: ALIAS_PROBE_COOLDOWN_MS - (now - lastAliasProbeAt) });
+    }
+    lastAliasProbeAt = now;
+
+    // Sends a real message — the GUI must say so before calling this.
+    const result = await graph.sendJsonProbe({ from, to });
+    sendJson(res, 200, result);
+}
+
+// The bridge cannot itself confirm what a recipient's inbox shows for
+// From: — that needs mailbox read access this send-only relay doesn't (and
+// shouldn't) have. This records what a human checked after
+// handleAliasProbe's message actually arrived.
+async function handleAliasVerify(req, res) {
+    const body = await readJsonBody(req);
+    if (typeof body.honored !== 'boolean') return sendJson(res, 400, { error: 'invalid_request' });
+    await store.mutate((s) => {
+        s.oauth.aliasFromSupported = body.honored;
+    });
+    events.emitEvent(body.honored ? 'alias-confirmed' : 'alias-degraded', {});
+    sendJson(res, 200, { ok: true });
 }
 
 const QUEUE_ITEM_RE = /^\/api\/queue\/([^/]+)(?:\/(retry|eml))?$/;
@@ -371,6 +520,8 @@ export async function handleApi(req, res, url) {
 
         if (req.method === 'GET' && pathname === '/api/queue') return await handleQueueList(req, res);
         if (req.method === 'POST' && pathname === '/api/test-mail') return await handleTestMail(req, res);
+        if (req.method === 'POST' && pathname === '/api/alias/probe') return await handleAliasProbe(req, res);
+        if (req.method === 'POST' && pathname === '/api/alias/verify') return await handleAliasVerify(req, res);
 
         const queueMatch = pathname.match(QUEUE_ITEM_RE);
         if (queueMatch) return await handleQueueItem(req, res, queueMatch[1], queueMatch[2]);

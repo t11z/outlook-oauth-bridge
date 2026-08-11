@@ -172,7 +172,7 @@ function stopSse() {
     }
 }
 
-const FEED_TYPES = new Set(['queued', 'sending', 'sent', 'retry', 'dead', 'auth', 'auth-failure', 'paused', 'resumed']);
+const FEED_TYPES = new Set(['queued', 'sending', 'sent', 'retry', 'dead', 'auth', 'auth-failure', 'paused', 'resumed', 'alias-degraded', 'alias-confirmed']);
 const STATE_REFRESH_TYPES = new Set(['queued', 'sending', 'sent', 'retry', 'dead', 'paused', 'resumed']);
 
 function handleEvent(event) {
@@ -363,9 +363,117 @@ function renderSnippet() {
     $('snippet-output').textContent = snippets[active] || snippets.generic;
 }
 
+// ---------------------------------------------------------------------------
+// Sender addresses (aliases)
+// ---------------------------------------------------------------------------
+
+// Builds one editable row per configured alias. Always leaves at least one
+// blank row so "Add address" isn't the only way in on first use. Built with
+// createElement/textContent throughout — these values round-trip through
+// the settings API and end up in RFC 5322 headers, so this file follows the
+// same no-innerHTML-with-user-data convention as renderQueueTable/renderDeadTable.
+function renderSenderAddresses() {
+    const list = $('sender-address-list');
+    list.innerHTML = '';
+    const addresses = dashboard.settings.senderAddresses ?? [];
+    for (const entry of addresses) addSenderAddressRow(entry.address, entry.displayName || '');
+    if (addresses.length === 0) addSenderAddressRow('', '');
+    populateSenderSelects();
+}
+
+function addSenderAddressRow(address, displayName) {
+    const list = $('sender-address-list');
+    const row = document.createElement('div');
+    row.className = 'inline-form sender-address-row';
+
+    const addrInput = document.createElement('input');
+    addrInput.type = 'email';
+    addrInput.placeholder = 'alias@outlook.com';
+    addrInput.value = address;
+    addrInput.className = 'sender-address-input';
+    addrInput.addEventListener('input', populateSenderSelects);
+
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.placeholder = 'Display name (optional)';
+    nameInput.value = displayName;
+    nameInput.className = 'sender-address-name';
+
+    const removeBtn = actionButton(
+        'trash',
+        'Remove address',
+        () => {
+            row.remove();
+            populateSenderSelects();
+        },
+        true
+    );
+
+    row.append(addrInput, nameInput, removeBtn);
+    list.appendChild(row);
+}
+
+function collectSenderAddresses() {
+    return Array.from(document.querySelectorAll('#sender-address-list .sender-address-row'))
+        .map((row) => ({
+            address: row.querySelector('.sender-address-input').value.trim(),
+            displayName: row.querySelector('.sender-address-name').value.trim() || null,
+        }))
+        .filter((e) => e.address);
+}
+
+// Keeps the default-sender select, the test-mail "send as" select, and the
+// alias-probe select all in sync with whatever is currently typed into the
+// address rows — even before the settings form is saved, so a freshly typed
+// alias can be probed or test-mailed without a round trip first.
+function populateSenderSelects() {
+    const primary = dashboard.oauth.account?.address || null;
+    const aliases = collectSenderAddresses();
+    const options = [];
+    if (primary) options.push({ address: primary, label: `${primary} (primary)` });
+    for (const a of aliases) options.push({ address: a.address, label: a.displayName ? `${a.address} (${a.displayName})` : a.address });
+
+    const defaultSelect = $('setting-defaultSender');
+    const previousDefault = defaultSelect.value;
+    defaultSelect.innerHTML = '';
+    const accountOpt = document.createElement('option');
+    accountOpt.value = '';
+    accountOpt.textContent = primary ? `${primary} (account default)` : 'Account default';
+    defaultSelect.appendChild(accountOpt);
+    for (const o of options) {
+        const opt = document.createElement('option');
+        opt.value = o.address;
+        opt.textContent = o.label;
+        defaultSelect.appendChild(opt);
+    }
+    if (Array.from(defaultSelect.options).some((o) => o.value === previousDefault)) defaultSelect.value = previousDefault;
+
+    for (const selectId of ['test-mail-from', 'alias-probe-address']) {
+        const select = $(selectId);
+        if (!select) continue;
+        const previous = select.value;
+        select.innerHTML = '';
+        for (const o of options) {
+            const opt = document.createElement('option');
+            opt.value = o.address;
+            opt.textContent = o.label;
+            select.appendChild(opt);
+        }
+        if (Array.from(select.options).some((o) => o.value === previous)) select.value = previous;
+    }
+
+    $('test-mail-from').closest('.field').hidden = options.length <= 1;
+    $('alias-probe').hidden = aliases.length === 0;
+}
+
 function renderSettings() {
     const s = dashboard.settings;
     $('setting-fromRewrite').checked = s.fromRewrite;
+    $('setting-aliasForceFrom').checked = s.aliasForceFrom;
+    renderSenderAddresses();
+    $('setting-defaultSender').value = s.defaultSender || '';
+    const needsReconnect = s.aliasForceFrom && !(dashboard.oauth.grantedScope || '').includes('Mail.ReadWrite');
+    $('alias-reconnect-hint').hidden = !needsReconnect;
     $('setting-requireTls').checked = s.requireTls;
     // Falls back to 2525 for a state.json predating this setting. If the
     // current value isn't one of the standard options (e.g. a custom
@@ -393,9 +501,9 @@ function renderSettings() {
 const FEED_CAP = 200;
 
 function feedLampClass(type) {
-    if (type === 'sent') return 'lamp--ok';
+    if (type === 'sent' || type === 'alias-confirmed') return 'lamp--ok';
     if (type === 'dead' || type === 'auth-failure') return 'lamp--err';
-    if (type === 'retry' || type === 'paused') return 'lamp--warn';
+    if (type === 'retry' || type === 'paused' || type === 'alias-degraded') return 'lamp--warn';
     return '';
 }
 
@@ -419,6 +527,10 @@ function feedLabel(event) {
             return `paused — ${event.reason}`;
         case 'resumed':
             return 'resumed';
+        case 'alias-degraded':
+            return 'alias not honored by Graph — falling back to primary';
+        case 'alias-confirmed':
+            return 'alias confirmed working';
         default:
             return event.type;
     }
@@ -672,12 +784,65 @@ function wireForms() {
     $('test-mail-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const to = $('test-mail-to').value.trim();
+        const from = $('test-mail-from').value || undefined;
         $('test-mail-result').textContent = 'Sending…';
         try {
-            await api('/api/test-mail', { method: 'POST', body: { to } });
+            await api('/api/test-mail', { method: 'POST', body: { to, from } });
             $('test-mail-result').textContent = 'Queued — check the live feed below.';
         } catch (err) {
             $('test-mail-result').textContent = err.message;
+        }
+    });
+
+    $('sender-address-add').addEventListener('click', () => {
+        addSenderAddressRow('', '');
+        populateSenderSelects();
+    });
+
+    $('setting-aliasForceFrom').addEventListener('change', () => {
+        const needsReconnect = $('setting-aliasForceFrom').checked && !(dashboard.oauth.grantedScope || '').includes('Mail.ReadWrite');
+        $('alias-reconnect-hint').hidden = !needsReconnect;
+    });
+
+    $('alias-probe-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const address = $('alias-probe-address').value;
+        const to = $('alias-probe-to').value.trim();
+        $('alias-probe-verify').hidden = true;
+        $('alias-probe-result').textContent = 'Sending a real probe message…';
+        try {
+            const res = await api('/api/alias/probe', { method: 'POST', body: { address, to } });
+            if (res.ok) {
+                $('alias-probe-result').textContent = 'Graph accepted the alias — check that inbox, then say what the From line actually showed.';
+                $('alias-probe-verify').hidden = false;
+            } else if (res.code === 'ErrorSendAsDenied') {
+                $('alias-probe-result').textContent =
+                    'Rejected: this address isn\'t enabled as a "send from" alias on the Outlook.com account yet — enable it in Outlook on the web first (Settings → Mail → Compose and reply → "Addresses to send from").';
+            } else {
+                $('alias-probe-result').textContent = `Probe failed: ${res.message || res.code}`;
+            }
+        } catch (err) {
+            $('alias-probe-result').textContent = err.message;
+        }
+    });
+
+    $('alias-verify-yes').addEventListener('click', async () => {
+        try {
+            await api('/api/alias/verify', { method: 'POST', body: { honored: true } });
+            $('alias-probe-verify').hidden = true;
+            $('alias-probe-result').textContent = 'Recorded: this account honors a forced alias From.';
+        } catch (err) {
+            toast(err.message, { error: true });
+        }
+    });
+
+    $('alias-verify-no').addEventListener('click', async () => {
+        try {
+            await api('/api/alias/verify', { method: 'POST', body: { honored: false } });
+            $('alias-probe-verify').hidden = true;
+            $('alias-probe-result').textContent = 'Recorded: this account does not honor a forced alias From — mail will keep going out from the primary address with the alias as Reply-To.';
+        } catch (err) {
+            toast(err.message, { error: true });
         }
     });
 
@@ -685,6 +850,9 @@ function wireForms() {
         e.preventDefault();
         const patch = {
             fromRewrite: $('setting-fromRewrite').checked,
+            senderAddresses: collectSenderAddresses(),
+            defaultSender: $('setting-defaultSender').value || null,
+            aliasForceFrom: $('setting-aliasForceFrom').checked,
             requireTls: $('setting-requireTls').checked,
             smtpPort: Number($('setting-smtpPort').value),
             rateLimitPerMin: Number($('setting-rateLimitPerMin').value),
@@ -695,11 +863,12 @@ function wireForms() {
         try {
             const res = await api('/api/settings', { method: 'POST', body: patch });
             dashboard.settings = res.settings;
+            renderSettings();
             // Deliberately not touching dashboard.smtp.port / renderClientConfig()
             // here: the SMTP client card's port, snippets, and copy buttons must
             // keep showing the port actually listening right now, not the
             // pending one — nothing is reachable on the new port until restart.
-            toast('Settings saved.');
+            toast(res.defaultSenderReset ? 'Settings saved — default sender was removed from the list, reset to the account address.' : 'Settings saved.');
         } catch (err) {
             toast(err.message, { error: true });
         }
