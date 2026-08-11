@@ -161,3 +161,165 @@ test('a transient Graph error (503) is classified as retryable and queues for an
 
     fg.setMode('success'); // let it recover so it doesn't sit retrying for the rest of the suite
 });
+
+// ---------------------------------------------------------------------------
+// Sender addresses (aliases)
+// ---------------------------------------------------------------------------
+
+test('an allowed alias already in the From: header is delivered unrewritten, with no Reply-To added', async () => {
+    fg.setMode('success');
+    fg.setEnforceFrom(true);
+    fg.setAliases(['scans@outlook.example']);
+    await store.mutate((s) => {
+        s.settings.senderAddresses = [{ address: 'scans@outlook.example', displayName: null }];
+    });
+    const sentBefore = store.state.counters.sent;
+
+    const t = transporter();
+    const info = await t.sendMail({ from: 'scans@outlook.example', to: 'visible@example.com', subject: 'alias header test', text: 'hi\n' });
+    assert.match(info.response, /^250/);
+
+    const delivered = await waitUntil(() => store.state.counters.sent > sentBefore);
+    assert.ok(delivered, 'expected the alias-From message to be delivered');
+
+    const req = fg.requests.filter((r) => r.url.endsWith('/sendMail')).at(-1);
+    const mime = Buffer.from(req.body.toString('utf8'), 'base64').toString('binary');
+    const headerBlock = mime.split('\r\n\r\n')[0];
+    assert.match(headerBlock, /From: scans@outlook\.example\r\n/, 'From should be passed through byte-identical, not rewritten');
+    assert.doesNotMatch(headerBlock, /Reply-To:/, 'nothing was rewritten, so there is nothing to preserve a Reply-To for');
+
+    fg.setEnforceFrom(false);
+    fg.setAliases([]);
+    await store.mutate((s) => {
+        s.settings.senderAddresses = [];
+    });
+});
+
+test('an allowed alias set only via the envelope MAIL FROM rewrites an unrelated header From, preserving it as Reply-To', async () => {
+    fg.setMode('success');
+    fg.setEnforceFrom(true);
+    fg.setAliases(['scans@outlook.example']);
+    await store.mutate((s) => {
+        s.settings.senderAddresses = [{ address: 'scans@outlook.example', displayName: null }];
+    });
+    const sentBefore = store.state.counters.sent;
+
+    const t = transporter();
+    const info = await t.sendMail({
+        from: '"HP LaserJet 4000" <printer@lan.local>',
+        envelope: { from: 'scans@outlook.example', to: ['visible@example.com'] },
+        to: 'visible@example.com',
+        subject: 'alias envelope test',
+        text: 'hi\n',
+    });
+    assert.match(info.response, /^250/);
+
+    const delivered = await waitUntil(() => store.state.counters.sent > sentBefore);
+    assert.ok(delivered, 'expected the envelope-alias message to be delivered');
+
+    const req = fg.requests.filter((r) => r.url.endsWith('/sendMail')).at(-1);
+    const mime = Buffer.from(req.body.toString('utf8'), 'base64').toString('binary');
+    const headerBlock = mime.split('\r\n\r\n')[0];
+    assert.match(headerBlock, /From: "HP LaserJet 4000" <scans@outlook\.example>\r\n/);
+    assert.match(headerBlock, /Reply-To: printer@lan\.local\r\n/);
+
+    fg.setEnforceFrom(false);
+    fg.setAliases([]);
+    await store.mutate((s) => {
+        s.settings.senderAddresses = [];
+    });
+});
+
+test('an unlisted sender still falls back to the primary address with Reply-To, even with aliases configured', async () => {
+    fg.setMode('success');
+    await store.mutate((s) => {
+        s.settings.senderAddresses = [{ address: 'scans@outlook.example', displayName: null }];
+    });
+    const sentBefore = store.state.counters.sent;
+
+    const t = transporter();
+    const info = await t.sendMail({ from: '"Random Device" <random@lan.local>', to: 'visible@example.com', subject: 'unlisted sender test', text: 'hi\n' });
+    assert.match(info.response, /^250/);
+
+    const delivered = await waitUntil(() => store.state.counters.sent > sentBefore);
+    assert.ok(delivered);
+
+    const req = fg.requests.filter((r) => r.url.endsWith('/sendMail')).at(-1);
+    const mime = Buffer.from(req.body.toString('utf8'), 'base64').toString('binary');
+    const headerBlock = mime.split('\r\n\r\n')[0];
+    assert.match(headerBlock, /From: "Random Device" <fake@outlook\.example>\r\n/);
+    assert.match(headerBlock, /Reply-To: random@lan\.local\r\n/);
+
+    await store.mutate((s) => {
+        s.settings.senderAddresses = [];
+    });
+});
+
+test('an alias listed in bridge settings but not actually enabled on the Microsoft account is rejected by Graph and dead-lettered (send_as_denied, finally exercised)', async () => {
+    fg.setMode('success');
+    fg.setEnforceFrom(true);
+    fg.setAliases([]); // deliberately NOT enabled on the fake account, unlike the bridge's own settings below
+    await store.mutate((s) => {
+        s.settings.senderAddresses = [{ address: 'notreally@outlook.example', displayName: null }];
+    });
+    const deadBefore = store.state.counters.dead;
+
+    const t = transporter();
+    const info = await t.sendMail({ from: 'notreally@outlook.example', to: 'visible@example.com', subject: 'unverified alias test', text: 'hi\n' });
+    assert.match(info.response, /^250/); // accepted at SMTP; the rejection is Graph-side
+
+    const wentDead = await waitUntil(() => store.state.counters.dead > deadBefore);
+    assert.ok(wentDead, 'expected Graph rejecting an address the bridge believed was a valid alias to dead-letter the message');
+
+    fg.setEnforceFrom(false);
+    await store.mutate((s) => {
+        s.settings.senderAddresses = [];
+    });
+});
+
+test('aliasForceFrom: a mailbox that does not honor the PATCH still delivers (from primary, not dead-lettered), records aliasFromSupported=false, and the next message skips straight to the single-call path', async () => {
+    fg.setMode('success');
+    fg.setEnforceFrom(true);
+    fg.setAliases(['scans@outlook.example']);
+    fg.setHonorPatchFrom(false);
+    await store.mutate((s) => {
+        s.settings.senderAddresses = [{ address: 'scans@outlook.example', displayName: null }];
+        s.settings.aliasForceFrom = true;
+        s.oauth.grantedScope = 'offline_access Mail.Send Mail.ReadWrite User.Read';
+        s.oauth.aliasFromSupported = null;
+    });
+
+    const sentBefore = store.state.counters.sent;
+    const deadBefore = store.state.counters.dead;
+    const draftPostsBefore = fg.requests.filter((r) => r.url.endsWith('/me/messages') && r.method === 'POST').length;
+
+    const t = transporter();
+    const info = await t.sendMail({ from: 'scans@outlook.example', to: 'visible@example.com', subject: 'degraded alias test', text: 'hi\n' });
+    assert.match(info.response, /^250/);
+
+    const delivered = await waitUntil(() => store.state.counters.sent > sentBefore);
+    assert.ok(delivered, 'a degraded alias must still be delivered, not dead-lettered');
+    assert.equal(store.state.counters.dead, deadBefore, 'no dead-letter should result from a degraded (not rejected) alias');
+    assert.equal(store.state.oauth.aliasFromSupported, false);
+
+    const draftPostsAfterFirst = fg.requests.filter((r) => r.url.endsWith('/me/messages') && r.method === 'POST').length;
+    assert.equal(draftPostsAfterFirst, draftPostsBefore + 1, 'expected exactly one draft created for the first (probing) message');
+
+    const sentBeforeSecond = store.state.counters.sent;
+    const info2 = await t.sendMail({ from: 'scans@outlook.example', to: 'visible@example.com', subject: 'degraded alias test 2', text: 'hi\n' });
+    assert.match(info2.response, /^250/);
+    const delivered2 = await waitUntil(() => store.state.counters.sent > sentBeforeSecond);
+    assert.ok(delivered2);
+
+    const draftPostsAfterSecond = fg.requests.filter((r) => r.url.endsWith('/me/messages') && r.method === 'POST').length;
+    assert.equal(draftPostsAfterSecond, draftPostsAfterFirst, 'a mailbox already known not to honor the alias must not pay for three round trips again');
+
+    fg.setEnforceFrom(false);
+    fg.setAliases([]);
+    fg.setHonorPatchFrom(true);
+    await store.mutate((s) => {
+        s.settings.senderAddresses = [];
+        s.settings.aliasForceFrom = false;
+        s.oauth.aliasFromSupported = null;
+    });
+});

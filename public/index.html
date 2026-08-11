@@ -171,6 +171,10 @@
     <section id="card-test-mail" class="panel" hidden>
       <div class="eyebrow">Test</div>
       <form id="test-mail-form" class="inline-form">
+        <label class="field" style="min-width: 180px">
+          <span>Send as</span>
+          <select id="test-mail-from"></select>
+        </label>
         <label class="field" style="flex: 1; min-width: 220px">
           <span>Send a test mail to</span>
           <input id="test-mail-to" type="email" placeholder="you@example.com" required />
@@ -178,6 +182,33 @@
         <button type="submit" class="btn btn--primary">Send</button>
       </form>
       <p id="test-mail-result" class="text-muted small" style="margin-top: var(--sp-2)"></p>
+
+      <div id="alias-probe" class="stack" style="gap: var(--sp-2); margin-top: var(--sp-3)" hidden>
+        <hr class="divider" />
+        <h3 style="margin: 0">Verify an alias</h3>
+        <p class="text-muted small" style="margin: 0">
+          Sends a real message from the selected alias, bypassing the queue, so you can check what the recipient's inbox actually shows. The bridge can't read that inbox itself &mdash; it can only ask you.
+        </p>
+        <form id="alias-probe-form" class="inline-form">
+          <label class="field" style="min-width: 180px">
+            <span>Alias</span>
+            <select id="alias-probe-address"></select>
+          </label>
+          <label class="field" style="flex: 1; min-width: 220px">
+            <span>Send probe to</span>
+            <input id="alias-probe-to" type="email" placeholder="you@example.com" required />
+          </label>
+          <button type="submit" class="btn btn--ghost">Probe</button>
+        </form>
+        <p id="alias-probe-result" class="text-muted small" style="margin: 0"></p>
+        <div id="alias-probe-verify" class="row-between" hidden>
+          <span>What did the From line say in that inbox?</span>
+          <span>
+            <button id="alias-verify-yes" type="button" class="btn btn--ghost small">The alias</button>
+            <button id="alias-verify-no" type="button" class="btn btn--ghost small">The primary address</button>
+          </span>
+        </div>
+      </div>
     </section>
 
     <!-- Live feed -->
@@ -215,10 +246,30 @@
     <section id="card-settings" class="panel">
       <div class="eyebrow">Settings</div>
       <form id="settings-form" class="stack" style="padding: 0; gap: var(--sp-3)">
+        <div class="stack" style="gap: var(--sp-2)">
+          <h3 style="margin: 0">Sender addresses</h3>
+          <p class="text-muted small" style="margin: 0">
+            Each address must first be enabled in Outlook on the web under Settings &rarr; Mail &rarr; Compose and reply &rarr; "Addresses to send from". Adding it here only tells the bridge it's allowed to use it &mdash; it doesn't grant anything on Microsoft's side.
+          </p>
+          <div id="sender-address-list" class="stack" style="gap: var(--sp-2)"></div>
+          <button id="sender-address-add" type="button" class="btn btn--ghost" style="align-self: flex-start">Add address</button>
+          <label class="field">
+            <span>Default sender</span>
+            <select id="setting-defaultSender"></select>
+          </label>
+        </div>
+
         <label class="switch-row">
-          <span>Rewrite From to the connected account</span>
+          <span>Rewrite From to an address this account can send as</span>
           <input id="setting-fromRewrite" type="checkbox" />
         </label>
+        <label class="switch-row">
+          <span>Try to force From to the alias on Microsoft's side (experimental &mdash; requires reconnecting, grants read access to the mailbox)</span>
+          <input id="setting-aliasForceFrom" type="checkbox" />
+        </label>
+        <p id="alias-reconnect-hint" class="text-muted small" style="margin: 0" hidden>
+          Reconnect (Connection panel above) to grant the extra permission this needs &mdash; it won't take effect until then.
+        </p>
         <label class="switch-row">
           <span>Require TLS (STARTTLS) for SMTP &mdash; takes effect after restart</span>
           <input id="setting-requireTls" type="checkbox" />

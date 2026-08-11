@@ -119,6 +119,57 @@ export function normalizeAddress(addr) {
     return addr.trim().toLowerCase();
 }
 
+// ---------------------------------------------------------------------------
+// Sender selection
+// ---------------------------------------------------------------------------
+
+// A stored address/display name is written verbatim into a header. web/api.js
+// validates on the way into state.json (the only place these are meant to
+// come from), so this is defense in depth against a hand-edited state.json —
+// anything that could split a header line disqualifies the candidate rather
+// than reaching rewriteFromHeader.
+const UNSAFE_ADDRESS_RE = /[\r\n<>,"]/;
+
+// Precedence, highest first: the MIME From: header (what the message itself
+// claims to be), then the SMTP envelope MAIL FROM (the cheap win — many
+// devices expose a "sender address" field that maps to MAIL FROM while
+// hardcoding an unrelated From: header you can't touch, e.g. a printer stuck
+// on printer@lan.local), then the default. A candidate that isn't in
+// `allowed` is never rejected, only skipped — the next one in the precedence
+// order gets a chance, and if none match, `defaultAddress` (or failing that,
+// the first allowed entry, always the connected account's own address) wins.
+// This is deliberate: rejecting an unlisted sender would break every device
+// already sending MAIL FROM:<printer@lan.local> today.
+//
+// `allowed` entries are { address, displayName }; the connected account's own
+// address is always allowed and is expected to be first in the list passed
+// in, so it's the fallback of last resort when defaultAddress itself doesn't
+// resolve to anything in the list (e.g. it was cleared by an account switch).
+export function selectSender({ headerFrom, envelopeFrom, allowed, defaultAddress }) {
+    const list = allowed.filter((e) => e && typeof e.address === 'string' && e.address.includes('@') && !UNSAFE_ADDRESS_RE.test(e.address));
+    const find = (addr) => (addr ? list.find((e) => normalizeAddress(e.address) === normalizeAddress(addr)) : undefined);
+
+    const headerAddr = headerFrom ? extractAddrSpec(headerFrom) : null;
+    // '@' guards against non-address envelope values reaching here — notably
+    // the GUI's test-mail path, which historically passed the literal string
+    // "bridge" (store.state.smtp.username) as envelopeFrom, and the empty
+    // string smtp-server produces for MAIL FROM:<>.
+    const envelopeAddr = envelopeFrom && envelopeFrom.includes('@') ? envelopeFrom : null;
+
+    const headerHit = find(headerAddr);
+    const envelopeHit = headerHit ? undefined : find(envelopeAddr);
+    const hit = headerHit || envelopeHit;
+    const requested = headerAddr || envelopeAddr || null;
+
+    if (hit) {
+        return { address: hit.address, displayName: hit.displayName ?? null, source: headerHit ? 'header' : 'envelope', matched: true, requested };
+    }
+
+    const fallback = find(defaultAddress) || list[0] || null;
+    if (!fallback) return { address: null, displayName: null, source: 'none', matched: false, requested };
+    return { address: fallback.address, displayName: fallback.displayName ?? null, source: 'default', matched: false, requested };
+}
+
 // Recognizes only the empty RFC 5322 group form ("undisclosed-recipients:;")
 // — the one shape these devices actually emit in the wild. A group with a
 // real embedded address list ("team: a@x, b@y;") is not parsed; its
@@ -153,30 +204,52 @@ const ENCODED_WORD_RE = /^(=\?[^?]+\?[BbQq]\?[^?]*\?=\s*)+$/;
 // From rewrite
 // ---------------------------------------------------------------------------
 
+// Formats a display name for use in a From: value, shared by the
+// insert-when-absent and replace branches of rewriteFromHeader below so they
+// can't drift into formatting the same name two different ways. The CR/LF
+// strip is not cosmetic: a device-supplied display name has already been
+// collapsed to spaces by unfoldHeaders' folding logic before we ever see it,
+// but a sender's displayName from settings.senderAddresses (set through the
+// web GUI) reaches this function un-normalized — normalizeCrlf runs on the
+// raw input buffer, before headers are rebuilt from parts, so a raw CRLF
+// here would be a genuine header injection, not a formatting glitch.
+function formatDisplayName(name) {
+    const safe = name.replace(/[\r\n]/g, ' ');
+    // RFC 2047 forbids encoded-words inside a quoted-string — see
+    // ENCODED_WORD_RE above.
+    return ENCODED_WORD_RE.test(safe) ? safe : `"${escapeQuotedString(safe)}"`;
+}
+
 // Exchange always sends as the authenticated mailbox; a mismatched From
-// gets ErrorSendAsDenied (confirmed against the live API, not just docs).
-// Preserves the original display name so "HP LaserJet" still shows up in
-// the inbox, and adds Reply-To only if the message doesn't already have one.
-export function rewriteFromHeader(headers, accountAddress) {
+// gets ErrorSendAsDenied (confirmed against the live API, not just docs) —
+// or, per an unconfirmed report against consumer accounts with aliases, gets
+// silently forced back to the primary address instead of rejected. Either
+// way, `sender.address` here is the one address this send is actually
+// allowed to claim to be (resolved by selectSender, above) — it may be the
+// connected account's own address (today's only case) or an allowed alias.
+//
+// Preserves the message's own display name so "HP LaserJet" still shows up
+// in the inbox; `sender.displayName` is only a FALLBACK, used when the
+// message has none of its own, e.g. a configured label for an alias mailbox.
+// Adds Reply-To only if the message doesn't already have one.
+export function rewriteFromHeader(headers, sender) {
+    const { address, displayName: fallbackName = null } = sender;
     const fromIdx = headers.findIndex((h) => h.lowerName === 'from');
 
     if (fromIdx === -1) {
-        headers.unshift({ name: 'From', lowerName: 'from', value: `<${accountAddress}>`, raw: `From: <${accountAddress}>` });
+        const value = fallbackName ? `${formatDisplayName(fallbackName)} <${address}>` : `<${address}>`;
+        headers.unshift({ name: 'From', lowerName: 'from', value, raw: `From: ${value}` });
         return { rewritten: true };
     }
 
     const original = headers[fromIdx];
     const addr = extractAddrSpec(original.value);
-    if (addr && normalizeAddress(addr) === normalizeAddress(accountAddress)) {
+    if (addr && normalizeAddress(addr) === normalizeAddress(address)) {
         return { rewritten: false };
     }
 
-    const displayName = extractDisplayName(original.value);
-    const newValue = displayName
-        ? ENCODED_WORD_RE.test(displayName)
-            ? `${displayName} <${accountAddress}>`
-            : `"${escapeQuotedString(displayName)}" <${accountAddress}>`
-        : `<${accountAddress}>`;
+    const displayName = extractDisplayName(original.value) || fallbackName;
+    const newValue = displayName ? `${formatDisplayName(displayName)} <${address}>` : `<${address}>`;
     headers[fromIdx] = { name: 'From', lowerName: 'from', value: newValue, raw: `From: ${newValue}` };
 
     if (addr && !headers.some((h) => h.lowerName === 'reply-to')) {
@@ -231,10 +304,33 @@ export function reconcileRecipients(headers, envelopeTo) {
 
 // rawBuffer: the message exactly as received over SMTP DATA.
 // envelopeTo: RCPT TO addresses for this message.
-// accountAddress: the connected Outlook account's send-as address.
+// envelopeFrom: the SMTP MAIL FROM address for this message — the fallback
+//   candidate for sender selection when the From: header isn't an allowed
+//   address (see selectSender above).
+// accountAddress: the connected Outlook account's own address. Always
+//   allowed, and the ultimate fallback when nothing else resolves.
+// senderAddresses: settings.senderAddresses — [{ address, displayName }] of
+//   additionally allowed aliases, user-maintained (Graph doesn't expose a
+//   consumer account's aliases, so there's nothing to auto-discover here).
+// defaultSender: settings.defaultSender — an address string, or null/absent
+//   to mean accountAddress.
 // fromRewrite: settings.fromRewrite — false passes From through untouched.
+//   Sender selection still runs even when this is false: smtp.js needs to
+//   know which address this message claims to be regardless, to decide
+//   whether the alias-forcing send path in graph.js applies.
 // bridgeId: spool message id, added as X-Outlook-Bridge-Id for traceability.
-export function processOutgoingMessage(rawBuffer, { envelopeTo, accountAddress, fromRewrite = true, bridgeId }) {
+// aliasReplyToInsurance: true while smtp.js's aliasPathAvailable() would
+//   take the alias-forcing send path AND oauth.aliasFromSupported isn't
+//   already confirmed true. Covers the one case rewriteFromHeader's own
+//   Reply-To logic doesn't: the device's own From: already said the alias,
+//   so nothing gets rewritten and no Reply-To gets added by that path. If
+//   graph.js's PATCH-based From-forcing turns out not to be honored by
+//   Graph for this account, this is what still gets a reply back to the
+//   alias mailbox instead of the primary one.
+export function processOutgoingMessage(
+    rawBuffer,
+    { envelopeTo, envelopeFrom = null, accountAddress, senderAddresses = [], defaultSender = null, fromRewrite = true, aliasReplyToInsurance = false, bridgeId }
+) {
     const normalized = normalizeCrlf(rawBuffer);
     const { headerBlock, bodyStr } = splitMessage(normalized);
     const headers = unfoldHeaders(headerBlock);
@@ -242,9 +338,24 @@ export function processOutgoingMessage(rawBuffer, { envelopeTo, accountAddress, 
     const subject = getHeaderValue(headers, 'subject');
     const originalFrom = getHeaderValue(headers, 'from');
 
+    const sender = selectSender({
+        headerFrom: originalFrom,
+        envelopeFrom,
+        allowed: [{ address: accountAddress, displayName: null }, ...senderAddresses],
+        defaultAddress: defaultSender || accountAddress,
+    });
+
     let rewrittenFrom = false;
-    if (fromRewrite && accountAddress) {
-        rewrittenFrom = rewriteFromHeader(headers, accountAddress).rewritten;
+    if (fromRewrite && sender.address) {
+        rewrittenFrom = rewriteFromHeader(headers, sender).rewritten;
+    }
+
+    const isGenuineAlias = sender.matched && accountAddress && normalizeAddress(sender.address) !== normalizeAddress(accountAddress);
+    if (aliasReplyToInsurance && isGenuineAlias && !rewrittenFrom && !headers.some((h) => h.lowerName === 'reply-to')) {
+        const fromIdx = headers.findIndex((h) => h.lowerName === 'from');
+        const header = { name: 'Reply-To', lowerName: 'reply-to', value: sender.address, raw: `Reply-To: ${sender.address}` };
+        if (fromIdx === -1) headers.push(header);
+        else headers.splice(fromIdx + 1, 0, header);
     }
 
     const reconcile = reconcileRecipients(headers, envelopeTo);
@@ -256,6 +367,6 @@ export function processOutgoingMessage(rawBuffer, { envelopeTo, accountAddress, 
     const finalText = serializeHeaders(headers) + '\r\n\r\n' + bodyStr;
     return {
         mime: toBuf(finalText),
-        meta: { headerFrom: originalFrom, subject, rewrittenFrom, reconcile },
+        meta: { headerFrom: originalFrom, subject, rewrittenFrom, reconcile, sender },
     };
 }

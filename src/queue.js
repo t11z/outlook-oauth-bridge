@@ -98,7 +98,29 @@ export function createQueue({ clock = realClock } = {}) {
         events.emitEvent('dead', { id: message.id, subject: message.subject, reason: message.lastError.message });
     }
 
+    // result.aliasOutcome only appears when this message took graph.js's
+    // alias-forcing draft->PATCH->send path (message.sendAs was set — see
+    // smtp.js's aliasPathAvailable). It travels independently of
+    // result.ok/class: a message can be delivered successfully AND have had
+    // its alias silently degraded to the primary address, or fail for an
+    // unrelated reason AND have had the alias confirmed. Persisting it here
+    // means every future message stops paying for three round trips (and
+    // stops risking the one-message dead-letter window described in
+    // smtp.spoolProcessedMessage/ARCHITECTURE.md) as soon as one message has
+    // established the answer for this mailbox.
+    async function recordAliasOutcome(result) {
+        if (result.aliasOutcome !== 'confirmed' && result.aliasOutcome !== 'degraded') return;
+        const supported = result.aliasOutcome === 'confirmed';
+        if (store.state.oauth.aliasFromSupported === supported) return;
+        await store.mutate((s) => {
+            s.oauth.aliasFromSupported = supported;
+        });
+        events.emitEvent(supported ? 'alias-confirmed' : 'alias-degraded', {});
+    }
+
     async function applyResult(message, result) {
+        await recordAliasOutcome(result);
+
         if (result.ok) {
             await deleteSpoolMessage(message.id);
             messages = messages.filter((m) => m.id !== message.id);
@@ -181,7 +203,7 @@ export function createQueue({ clock = realClock } = {}) {
             return deadLetter(message, { class: 'permanent', code: 'SpoolReadError', message: err.message }, 'spool_read_error');
         }
 
-        const result = await graph.sendMail(eml);
+        const result = await graph.sendMail(eml, { from: message.sendAs ?? null });
         await applyResult(message, result);
     }
 

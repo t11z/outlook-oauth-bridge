@@ -1,6 +1,7 @@
 import { config } from './config.js';
 import { store } from './store.js';
 import { events } from './events.js';
+import { normalizeAddress } from './mime.js';
 
 const HTTP_TIMEOUT_MS = 30_000;
 
@@ -25,6 +26,24 @@ function sleep(ms) {
 // BRIDGE_CLIENT_ID wasn't set.
 export function currentClientId() {
     return store.state?.oauth?.clientId || config.oauth.clientId;
+}
+
+// Mirrors currentClientId() on purpose: ONE accessor, used by both the
+// device-code request (beginDeviceCodeFlow) and the refresh request
+// (refreshTokenGrant), so the scope actually requested and the scope
+// actually granted can never silently disagree the way clientId once did
+// (see currentClientId's comment / AADSTS900144 above).
+//
+// Mail.ReadWrite is requested ONLY when the user has opted into
+// aliasForceFrom. It grants read access to the entire mailbox, which a
+// send-only relay has no business holding by default — and since scope is
+// fixed at grant time (a refresh cannot silently widen it), turning the
+// setting on requires reconnecting through device code again before the
+// alias-forcing send path in graph.js can actually run. Mail.ReadWrite does
+// NOT subsume Mail.Send; both are needed for that path (PATCH the draft's
+// `from`, which needs Mail.ReadWrite, then send it, which needs Mail.Send).
+export function currentScope() {
+    return store.state?.settings?.aliasForceFrom ? `${config.oauth.scope} Mail.ReadWrite` : config.oauth.scope;
 }
 
 function tokenParams(extra) {
@@ -71,7 +90,7 @@ export function pendingDeviceCode() {
 export async function beginDeviceCodeFlow() {
     cancelDeviceCode(); // supersede any flow already in progress
 
-    const { ok, status, body } = await postForm(`${config.oauth.loginBase}/devicecode`, tokenParams({ scope: config.oauth.scope }));
+    const { ok, status, body } = await postForm(`${config.oauth.loginBase}/devicecode`, tokenParams({ scope: currentScope() }));
     if (!ok) {
         const message = body.error_description || body.error || `devicecode endpoint returned ${status}`;
         events.emitEvent('auth', { status: 'error', message });
@@ -142,6 +161,7 @@ async function completeConnection(tokenBody) {
 
     await store.mutate((state) => {
         state.oauth.refreshToken = tokenBody.refresh_token;
+        state.oauth.grantedScope = tokenBody.scope || null;
         state.oauth.status = 'connected';
         state.oauth.connectedAt = new Date().toISOString();
         state.oauth.lastError = null;
@@ -158,10 +178,25 @@ async function completeConnection(tokenBody) {
         return markNeedsReauth(new Error('Could not resolve an email address for this account (both mail and userPrincipalName were empty).'));
     }
 
+    // senderAddresses/defaultSender are aliases of ONE specific mailbox. A
+    // reconnect of the SAME account (the normal reauth case) must keep them;
+    // connecting a DIFFERENT one must not silently inherit aliases the new
+    // mailbox can't send as — every message would 403 straight into the
+    // dead-letter folder. aliasFromSupported is cleared unconditionally: it
+    // describes what was observed against the PREVIOUS token/mailbox and
+    // doesn't necessarily still hold.
+    const previousAddress = store.state.oauth.account?.address;
+    const accountChanged = previousAddress && normalizeAddress(previousAddress) !== normalizeAddress(account.address);
+
     await store.mutate((state) => {
         state.oauth.account = account;
+        state.oauth.aliasFromSupported = null;
+        if (accountChanged) {
+            state.settings.senderAddresses = [];
+            state.settings.defaultSender = null;
+        }
     });
-    events.emitEvent('auth', { status: 'connected', account });
+    events.emitEvent('auth', { status: 'connected', account, senderAddressesCleared: accountChanged || undefined });
 }
 
 async function fetchIdentity() {
@@ -188,7 +223,7 @@ export async function markNeedsReauth(err) {
 }
 
 async function refreshTokenGrant(refreshToken) {
-    const { ok, status, body } = await postForm(`${config.oauth.loginBase}/token`, tokenParams({ grant_type: 'refresh_token', refresh_token: refreshToken, scope: config.oauth.scope }));
+    const { ok, status, body } = await postForm(`${config.oauth.loginBase}/token`, tokenParams({ grant_type: 'refresh_token', refresh_token: refreshToken, scope: currentScope() }));
     if (!ok) {
         const err = new Error(body.error_description || body.error || `token endpoint returned ${status}`);
         err.oauthError = body.error;
@@ -232,6 +267,7 @@ async function doRefresh() {
     // persisting, the user would be permanently locked out.
     await store.mutate((state) => {
         state.oauth.refreshToken = body.refresh_token || currentRefreshToken;
+        state.oauth.grantedScope = body.scope || state.oauth.grantedScope;
         state.oauth.status = 'connected';
         state.oauth.lastError = null;
     });
@@ -265,10 +301,12 @@ export async function disconnect() {
     cache = null;
     await store.mutate((state) => {
         state.oauth.refreshToken = null;
+        state.oauth.grantedScope = null;
         state.oauth.account = null;
         state.oauth.status = 'unconfigured';
         state.oauth.connectedAt = null;
         state.oauth.lastError = null;
+        state.oauth.aliasFromSupported = null;
     });
     events.emitEvent('auth', { status: 'disconnected' });
 }

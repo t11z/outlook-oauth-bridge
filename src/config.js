@@ -60,6 +60,10 @@ export const config = {
 export const MAX_MESSAGE_BYTES = 3_000_000;
 export const MAX_RECIPIENTS = 50;
 export const DEAD_LETTER_CAP = 100;
+// Outlook.com personal accounts allow up to 10 aliases; 20 is generous
+// headroom and a hard bound on a list that's scanned per outgoing message.
+export const MAX_SENDER_ADDRESSES = 20;
+export const MAX_SENDER_DISPLAY_NAME = 128;
 export const SMTP_BANNER = 'outlook-oauth-bridge';
 
 // Defaults for the live-editable counterparts in state.json's `settings`
