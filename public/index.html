@@ -14,8 +14,8 @@
 <section id="view-login" class="login-shell" hidden>
   <form id="login-form" class="panel login-card" autocomplete="off">
     <div class="login-brand">
-      <svg viewBox="0 0 24 14" width="22" height="13" aria-hidden="true"><circle cx="3.5" cy="7" r="2.3" fill="currentColor"/><circle cx="20.5" cy="7" r="2.3" fill="currentColor"/><path d="M6 7h12" stroke="currentColor" stroke-width="1.6" stroke-dasharray="1.6 2.2" stroke-linecap="round"/></svg>
-      <span>outlook-oauth-bridge</span>
+      <span class="icon-chip icon-chip--fixed"><svg viewBox="0 0 24 14" width="15" height="9" aria-hidden="true"><circle cx="3.5" cy="7" r="2.3" fill="currentColor"/><circle cx="20.5" cy="7" r="2.3" fill="currentColor"/><path d="M6 7h12" stroke="currentColor" stroke-width="1.6" stroke-dasharray="1.6 2.2" stroke-linecap="round"/></svg></span>
+      <span>Outlook OAuth Bridge</span>
     </div>
     <p>Enter the password printed in the container logs on first run.</p>
     <label class="field">
@@ -32,8 +32,8 @@
   <header class="topbar">
     <div class="wrap topbar-inner">
       <div class="brand">
-        <svg viewBox="0 0 24 14" width="24" height="14" aria-hidden="true"><circle cx="3.5" cy="7" r="2.3" fill="currentColor"/><circle cx="20.5" cy="7" r="2.3" fill="currentColor"/><path d="M6 7h12" stroke="currentColor" stroke-width="1.6" stroke-dasharray="1.6 2.2" stroke-linecap="round"/></svg>
-        <span>outlook-oauth-bridge</span>
+        <span class="icon-chip icon-chip--theme"><svg viewBox="0 0 24 14" width="15" height="9" aria-hidden="true"><circle cx="3.5" cy="7" r="2.3" fill="currentColor"/><circle cx="20.5" cy="7" r="2.3" fill="currentColor"/><path d="M6 7h12" stroke="currentColor" stroke-width="1.6" stroke-dasharray="1.6 2.2" stroke-linecap="round"/></svg></span>
+        <span>Outlook OAuth Bridge</span>
       </div>
       <div class="statusline" id="statusline"></div>
       <div class="topbar-actions">
@@ -110,7 +110,7 @@
 
         <div id="device-code-panel" class="terminal" hidden>
           <p class="step-label">01 &middot; Open the sign-in page</p>
-          <a id="device-code-link" class="btn btn--primary" href="#" target="_blank" rel="noopener">
+          <a id="device-code-link" class="btn btn--accent" href="#" target="_blank" rel="noopener">
             Open microsoft.com/link
             <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M8 5H4.5a1 1 0 0 0-1 1v9.5a1 1 0 0 0 1 1H14a1 1 0 0 0 1-1V12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 3h6v6M17 3l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </a>
@@ -124,7 +124,7 @@
           <div class="indeterminate-bar"><div></div></div>
           <p class="text-muted small" style="margin: 0">Waiting for sign-in &middot; code expires in <span id="device-code-countdown" class="mono">15:00</span></p>
           <p class="text-muted small" style="margin: 0">Microsoft asks you to sign in again on that page even if you're already signed in elsewhere &mdash; expected for personal accounts.</p>
-          <button id="device-code-cancel" class="btn btn--ghost" type="button">Cancel</button>
+          <button id="device-code-cancel" class="btn btn--outline" type="button">Cancel</button>
         </div>
       </section>
 
@@ -198,7 +198,7 @@
             <span>Send probe to</span>
             <input id="alias-probe-to" type="email" placeholder="you@example.com" required />
           </label>
-          <button type="submit" class="btn btn--ghost">Probe</button>
+          <button type="submit" class="btn btn--outline">Probe</button>
         </form>
         <p id="alias-probe-result" class="text-muted small" style="margin: 0"></p>
         <div id="alias-probe-verify" class="row-between" hidden>
