@@ -594,7 +594,7 @@ async function refreshQueuePanel() {
 function actionButton(iconKey, label, onClick, danger = false) {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'btn btn--ghost small' + (danger ? ' btn--danger' : '');
+    b.className = 'btn btn--ghost btn--icon small' + (danger ? ' btn--danger' : '');
     b.title = label;
     b.setAttribute('aria-label', label);
     b.innerHTML = ICON[iconKey];
@@ -605,7 +605,7 @@ function actionButton(iconKey, label, onClick, danger = false) {
 function downloadLink(href) {
     const a = document.createElement('a');
     a.href = href;
-    a.className = 'btn btn--ghost small';
+    a.className = 'btn btn--ghost btn--icon small';
     a.title = 'Download .eml';
     a.setAttribute('aria-label', 'Download .eml');
     a.innerHTML = ICON.download;
